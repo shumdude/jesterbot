@@ -12,11 +12,11 @@ import (
 
 func buildMainMenu(b *bot.Bot, r *Router) *replykbd.ReplyKeyboard {
 	return replykbd.New(replykbd.ResizableKeyboard()).
-		Button("Сегодня", b, bot.MatchTypeExact, r.handleTodayCommand).
-		Button("Активности", b, bot.MatchTypeExact, r.handleActivitiesCommand).
+		Button("📅 Сегодня", b, bot.MatchTypeExact, r.handleTodayCommand).
+		Button("🧩 Активности", b, bot.MatchTypeExact, r.handleActivitiesCommand).
 		Row().
-		Button("Настройки", b, bot.MatchTypeExact, r.handleSettingsCommand).
-		Button("Статистика", b, bot.MatchTypeExact, r.handleStatsCommand)
+		Button("⚙️ Настройки", b, bot.MatchTypeExact, r.handleSettingsCommand).
+		Button("📊 Статистика", b, bot.MatchTypeExact, r.handleStatsCommand)
 }
 
 func buildActivitiesKeyboard(activities []domain.Activity) models.ReplyMarkup {
@@ -45,8 +45,8 @@ func buildPlanSelectionKeyboard(plan *domain.DayPlan) models.ReplyMarkup {
 	}
 
 	rows = append(rows, []models.InlineKeyboardButton{
-		{Text: "Сделаю всё", CallbackData: "plan:all"},
-		{Text: "Начать день", CallbackData: "plan:finalize"},
+		{Text: "💪 Сделаю всё", CallbackData: "plan:all"},
+		{Text: "🚀 Начать день", CallbackData: "plan:finalize"},
 	})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
