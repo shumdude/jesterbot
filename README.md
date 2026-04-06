@@ -66,7 +66,7 @@ Environment variables:
 Primary verification command:
 
 ```powershell
-$env:GOCACHE='C:\Users\thefi\.codex\memories\jesterbot-gocache'; go test ./...
+go test ./...
 ```
 
 ## Deployment
