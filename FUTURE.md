@@ -9,4 +9,4 @@ Planned improvements for the repository.
 - [ ] Add a slider for switching between pages when there are many tasks.
 - [x] Use more emojis.
 - [ ] Write more code comments to make AI-agent-driven development easier.
-- [ ] Write `README.md` files in project folders.
+- [x] Write `README.md` files in project folders.
