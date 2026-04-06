@@ -1,0 +1,15 @@
+.mcp.json
+
+.claude/
+.codex/
+.vscode/
+.gocache/
+data/
+*.db
+*.exe
+*.test
+.env
+docs/
+
+md-bank/
+agents.md
