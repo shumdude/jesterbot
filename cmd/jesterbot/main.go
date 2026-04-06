@@ -15,6 +15,7 @@ func main() {
 	defer stop()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger.Info("starting jesterbot")
 
 	application, err := app.New(logger)
 	if err != nil {
@@ -31,4 +32,6 @@ func main() {
 		logger.Error("application stopped with error", "error", err)
 		os.Exit(1)
 	}
+
+	logger.Info("application stopped gracefully")
 }

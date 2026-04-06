@@ -26,11 +26,20 @@ func New(logger *slog.Logger) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	logger.Info(
+		"configuration loaded",
+		"db_path", cfg.DBPath,
+		"tick_interval", cfg.TickInterval.String(),
+		"poll_timeout", cfg.PollTimeout.String(),
+		"worker_count", cfg.WorkerCount,
+		"default_reminder_minutes", cfg.DefaultReminderMinutes,
+	)
 
 	db, err := sqlite.Open(cfg.DBPath)
 	if err != nil {
 		return nil, err
 	}
+	logger.Info("database opened", "db_path", cfg.DBPath)
 
 	repo := sqlite.NewRepository(db)
 	svc := service.New(repo, cfg.DefaultReminderMinutes)
@@ -39,6 +48,7 @@ func New(logger *slog.Logger) (*App, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	logger.Info("telegram router initialized", "worker_count", cfg.WorkerCount, "poll_timeout", cfg.PollTimeout.String())
 
 	return &App{
 		Config:    cfg,
@@ -51,7 +61,13 @@ func New(logger *slog.Logger) (*App, error) {
 }
 
 func (a *App) Start(ctx context.Context) error {
-	a.Logger.Info("application bootstrap completed")
+	a.Logger.Info(
+		"application bootstrap completed",
+		"db_path", a.Config.DBPath,
+		"tick_interval", a.Config.TickInterval.String(),
+		"poll_timeout", a.Config.PollTimeout.String(),
+		"worker_count", a.Config.WorkerCount,
+	)
 	go a.Scheduler.Start(ctx)
 	return a.Telegram.Start(ctx)
 }
@@ -60,8 +76,10 @@ func (a *App) Close() error {
 	if a.DB == nil {
 		return nil
 	}
+	a.Logger.Info("closing application resources")
 	if err := a.DB.Close(); err != nil {
 		return fmt.Errorf("close database: %w", err)
 	}
+	a.Logger.Info("database closed")
 	return nil
 }

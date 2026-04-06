@@ -50,7 +50,9 @@ func NewRouter(logger *slog.Logger, token string, pollTimeout time.Duration, wor
 }
 
 func (r *Router) Start(ctx context.Context) error {
+	r.logger.Info("telegram polling started")
 	r.bot.Start(ctx)
+	r.logger.Info("telegram polling stopped")
 	return nil
 }
 
@@ -62,6 +64,9 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 	chatID := update.Message.Chat.ID
 	userText := strings.TrimSpace(update.Message.Text)
 	session := r.sessions.Get(chatID)
+	if session.State != stateIdle {
+		r.logMessageEvent("handling session text input", update.Message, "session_state", session.State, "text_length", len(userText))
+	}
 
 	switch session.State {
 	case stateRegisterName:
@@ -94,6 +99,7 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			return
 		}
 		r.sessions.Clear(chatID)
+		r.logger.Info("user registered", "user_id", user.ID, "chat_id", chatID, "telegram_user_id", update.Message.From.ID, "utc_offset_minutes", user.UTCOffsetMinutes, "morning_time", user.MorningTime)
 		r.sendMessage(ctx, chatID, welcomeText(user), r.mainMenu)
 	case stateAddActivity:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
@@ -154,10 +160,12 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 }
 
 func (r *Router) handleStart(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logMessageEvent("handling start command", update.Message)
 	chatID := update.Message.Chat.ID
 	user, err := r.service.FindUserByTelegramID(ctx, update.Message.From.ID)
 	if err == nil {
 		r.sessions.Clear(chatID)
+		r.logger.Info("start command for registered user", "user_id", user.ID, "chat_id", chatID)
 		r.sendMessage(ctx, chatID, welcomeText(user), r.mainMenu)
 		return
 	}
@@ -173,6 +181,7 @@ func (r *Router) handleStart(ctx context.Context, _ *bot.Bot, update *models.Upd
 }
 
 func (r *Router) handleTodayCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logMessageEvent("handling today command", update.Message)
 	chatID := update.Message.Chat.ID
 	user, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
@@ -199,6 +208,7 @@ func (r *Router) handleTodayCommand(ctx context.Context, _ *bot.Bot, update *mod
 }
 
 func (r *Router) handleActivitiesCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logMessageEvent("handling activities command", update.Message)
 	chatID := update.Message.Chat.ID
 	user, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
@@ -209,6 +219,7 @@ func (r *Router) handleActivitiesCommand(ctx context.Context, _ *bot.Bot, update
 }
 
 func (r *Router) handleSettingsCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logMessageEvent("handling settings command", update.Message)
 	chatID := update.Message.Chat.ID
 	_, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
@@ -219,6 +230,7 @@ func (r *Router) handleSettingsCommand(ctx context.Context, _ *bot.Bot, update *
 }
 
 func (r *Router) handleStatsCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logMessageEvent("handling stats command", update.Message)
 	chatID := update.Message.Chat.ID
 	user, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
@@ -245,6 +257,7 @@ func (r *Router) handleStatsCommand(ctx context.Context, _ *bot.Bot, update *mod
 }
 
 func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logCallbackEvent("handling activity callback", update.CallbackQuery)
 	r.answerCallback(ctx, update.CallbackQuery.ID)
 	chatID, userID, messageID := callbackIdentity(update)
 	user, err := r.registeredUser(ctx, userID)
@@ -283,6 +296,7 @@ func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update 
 }
 
 func (r *Router) handlePlanCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logCallbackEvent("handling plan callback", update.CallbackQuery)
 	r.answerCallback(ctx, update.CallbackQuery.ID)
 	chatID, userID, messageID := callbackIdentity(update)
 	user, err := r.registeredUser(ctx, userID)
@@ -304,6 +318,7 @@ func (r *Router) handlePlanCallback(ctx context.Context, _ *bot.Bot, update *mod
 			r.sendMessage(ctx, chatID, "Не получилось обновить выбор: "+err.Error(), nil)
 			return
 		}
+		r.logger.Info("plan item toggled", "user_id", user.ID, "chat_id", chatID, "activity_id", activityID, "selected_count", countSelectedItems(plan))
 		r.editMessage(ctx, chatID, messageID, selectionText(plan), buildPlanSelectionKeyboard(plan))
 	case data == "plan:finalize":
 		plan, err := r.service.FinalizePlan(ctx, user.ID, now)
@@ -311,6 +326,7 @@ func (r *Router) handlePlanCallback(ctx context.Context, _ *bot.Bot, update *mod
 			r.sendMessage(ctx, chatID, "Не получилось зафиксировать план: "+err.Error(), nil)
 			return
 		}
+		r.logger.Info("plan finalized", "user_id", user.ID, "chat_id", chatID, "selected_count", countSelectedItems(plan), "completed_count", countCompletedItems(plan))
 		r.editMessage(ctx, chatID, messageID, progressText(plan), buildProgressKeyboard(plan))
 	case data == "plan:all":
 		plan, err := r.service.SelectAllAndFinalize(ctx, user.ID, now)
@@ -318,11 +334,13 @@ func (r *Router) handlePlanCallback(ctx context.Context, _ *bot.Bot, update *mod
 			r.sendMessage(ctx, chatID, "Не получилось выбрать все активности: "+err.Error(), nil)
 			return
 		}
+		r.logger.Info("plan finalized with all activities", "user_id", user.ID, "chat_id", chatID, "selected_count", countSelectedItems(plan))
 		r.editMessage(ctx, chatID, messageID, progressText(plan), buildProgressKeyboard(plan))
 	}
 }
 
 func (r *Router) handleDoneCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logCallbackEvent("handling done callback", update.CallbackQuery)
 	r.answerCallback(ctx, update.CallbackQuery.ID)
 	chatID, userID, messageID := callbackIdentity(update)
 	user, err := r.registeredUser(ctx, userID)
@@ -342,13 +360,16 @@ func (r *Router) handleDoneCallback(ctx context.Context, _ *bot.Bot, update *mod
 		return
 	}
 
+	r.logger.Info("activity marked done", "user_id", user.ID, "chat_id", chatID, "activity_id", activityID, "completed_count", countCompletedItems(plan))
 	r.editMessage(ctx, chatID, messageID, progressText(plan), buildProgressKeyboard(plan))
 	if plan.Status == domain.PlanStatusCompleted {
+		r.logger.Info("day plan completed", "user_id", user.ID, "chat_id", chatID, "day", plan.DayLocal)
 		r.sendMessage(ctx, chatID, completionMessage(plan), r.mainMenu)
 	}
 }
 
 func (r *Router) handleSettingsCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logCallbackEvent("handling settings callback", update.CallbackQuery)
 	r.answerCallback(ctx, update.CallbackQuery.ID)
 	chatID, _, _ := callbackIdentity(update)
 
@@ -436,6 +457,41 @@ func (r *Router) answerCallback(ctx context.Context, callbackID string) {
 
 func callbackIdentity(update *models.Update) (chatID int64, userID int64, messageID int) {
 	return update.CallbackQuery.Message.Message.Chat.ID, update.CallbackQuery.From.ID, update.CallbackQuery.Message.Message.ID
+}
+
+func (r *Router) logMessageEvent(event string, message *models.Message, attrs ...any) {
+	args := []any{"chat_id", message.Chat.ID, "telegram_user_id", message.From.ID}
+	r.logger.Info(event, append(args, attrs...)...)
+}
+
+func (r *Router) logCallbackEvent(event string, callback *models.CallbackQuery, attrs ...any) {
+	args := []any{
+		"chat_id", callback.Message.Message.Chat.ID,
+		"telegram_user_id", callback.From.ID,
+		"message_id", callback.Message.Message.ID,
+		"callback_data", callback.Data,
+	}
+	r.logger.Info(event, append(args, attrs...)...)
+}
+
+func countSelectedItems(plan *domain.DayPlan) int {
+	count := 0
+	for _, item := range plan.Items {
+		if item.Selected {
+			count++
+		}
+	}
+	return count
+}
+
+func countCompletedItems(plan *domain.DayPlan) int {
+	count := 0
+	for _, item := range plan.Items {
+		if item.Completed {
+			count++
+		}
+	}
+	return count
 }
 
 func parseID(data string) (int64, error) {

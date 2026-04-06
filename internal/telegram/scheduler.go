@@ -29,8 +29,12 @@ func NewScheduler(logger *slog.Logger, tick time.Duration, svc *service.Service,
 }
 
 func (s *Scheduler) Start(ctx context.Context) {
+	s.logger.Info("scheduler started", "tick_interval", s.tick.String())
 	ticker := time.NewTicker(s.tick)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+		s.logger.Info("scheduler stopped")
+	}()
 
 	s.runTick(ctx)
 
@@ -81,6 +85,7 @@ func (s *Scheduler) handleMorning(ctx context.Context, user domain.User, now tim
 		return
 	}
 
+	s.logger.Info("scheduler sending morning plan", "user_id", user.ID, "chat_id", user.ChatID, "day", plan.DayLocal, "items", len(plan.Items))
 	s.router.sendMessage(ctx, user.ChatID, selectionText(plan), buildPlanSelectionKeyboard(plan))
 }
 
@@ -102,6 +107,7 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 		return
 	}
 	if errors.Is(err, domain.ErrPlanClosed) {
+		s.logger.Info("scheduler detected completed plan", "user_id", user.ID, "chat_id", user.ChatID, "day", plan.DayLocal)
 		s.router.sendMessage(ctx, user.ChatID, completionMessage(updatedPlan), s.router.mainMenu)
 		return
 	}
@@ -110,6 +116,15 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 		return
 	}
 
+	s.logger.Info(
+		"scheduler sending reminder",
+		"user_id", user.ID,
+		"chat_id", user.ChatID,
+		"day", updatedPlan.DayLocal,
+		"activity_id", item.ActivityID,
+		"activity_title", item.TitleSnapshot,
+		"cycle", updatedPlan.Cycle,
+	)
 	s.router.sendMessage(ctx, user.ChatID, reminderText(item, updatedPlan), buildReminderKeyboard(item))
 }
 
