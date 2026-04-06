@@ -2,6 +2,8 @@
 
 Telegram bot for daily activity planning, reminders, and progress tracking.
 
+Planned work lives in [FUTURE.md](FUTURE.md).
+
 ## What Is Implemented
 
 - registration flow with FSM-like in-memory session states
@@ -86,3 +88,7 @@ Use `deploy/systemd/jesterbot.service`, adjust `WorkingDirectory`, `Environment`
 sudo systemctl daemon-reload
 sudo systemctl enable --now jesterbot
 ```
+
+## Future
+
+See [FUTURE.md](FUTURE.md) for the current implementation backlog.
