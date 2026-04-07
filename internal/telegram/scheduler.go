@@ -145,14 +145,14 @@ func reminderText(item *domain.DayPlanItem, plan *domain.DayPlan) string {
 	}
 
 	lines := []string{
-		"Напоминание.",
-		fmt.Sprintf("Сейчас лучше сделать: %s", item.TitleSnapshot),
-		fmt.Sprintf("Осталось активностей: %d", pending),
+		"🔔 Напоминание.",
+		fmt.Sprintf("👉 Сейчас лучше сделать: %s", item.TitleSnapshot),
+		fmt.Sprintf("📌 Осталось активностей: %d", pending),
 	}
 
 	return strings.Join(lines, "\n")
 }
 
 func completionMessage(plan *domain.DayPlan) string {
-	return "Все активности на сегодня закрыты. Отличная работа."
+	return "🎉 Все активности на сегодня закрыты. Отличная работа."
 }

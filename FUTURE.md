@@ -7,6 +7,6 @@ Planned improvements for the repository.
 - [ ] Add an i18n mechanism and move bot text into dedicated translation files.
 - [ ] Add more inline buttons to make the bot flow more comfortable (but now reply buttons are good for pinned user hub).
 - [ ] Add a slider for switching between pages when there are many tasks.
-- [ ] Use more emojis.
+- [x] Use more emojis.
 - [ ] Write more code comments to make AI-agent-driven development easier.
-- [ ] Write `README.md` files in project folders.
+- [x] Write `README.md` files in project folders.
