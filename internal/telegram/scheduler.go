@@ -81,6 +81,8 @@ func (s *Scheduler) handleMorning(ctx context.Context, user domain.User, now tim
 		return
 	}
 
+	// Only send the morning prompt on the exact minute when the plan was created
+	// to avoid duplicate sends during the same minute across repeated ticks.
 	if plan.MorningSentAt == nil || !sameMinute(*plan.MorningSentAt, now) {
 		return
 	}

@@ -5,12 +5,15 @@ import "sync"
 type SessionState string
 
 const (
+	// Registration flow states.
 	stateIdle            SessionState = "idle"
 	stateRegisterName    SessionState = "register_name"
 	stateRegisterOffset  SessionState = "register_offset"
 	stateRegisterMorning SessionState = "register_morning"
+	// Activity management states.
 	stateAddActivity     SessionState = "add_activity"
 	stateEditActivity    SessionState = "edit_activity"
+	// Settings update states.
 	stateUpdateMorning   SessionState = "update_morning"
 	stateUpdateReminder  SessionState = "update_reminder"
 )
@@ -40,6 +43,8 @@ func (s *SessionStore) Get(chatID int64) Session {
 		return Session{State: stateIdle}
 	}
 
+	// Return a value copy so callers cannot mutate shared session state
+	// without going through Update (which provides synchronization).
 	return *session
 }
 
