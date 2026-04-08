@@ -63,6 +63,7 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 
 	chatID := update.Message.Chat.ID
 	userText := strings.TrimSpace(update.Message.Text)
+	// Text input is interpreted through per-chat state machine stored in SessionStore.
 	session := r.sessions.Get(chatID)
 	if session.State != stateIdle {
 		r.logMessageEvent("handling session text input", update.Message, "session_state", session.State, "text_length", len(userText))
@@ -456,6 +457,8 @@ func (r *Router) answerCallback(ctx context.Context, callbackID string) {
 }
 
 func callbackIdentity(update *models.Update) (chatID int64, userID int64, messageID int) {
+	// For callback queries, ownership checks and message edits rely on the tuple
+	// (chat id, telegram user id, message id).
 	return update.CallbackQuery.Message.Message.Chat.ID, update.CallbackQuery.From.ID, update.CallbackQuery.Message.Message.ID
 }
 
