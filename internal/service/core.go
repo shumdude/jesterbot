@@ -147,6 +147,8 @@ func (s *Service) StartMorningPlan(ctx context.Context, userID int64, now time.T
 		return nil, err
 	}
 
+	// A plan is unique per user and local calendar day (based on user's UTC offset).
+	// Repeated morning ticks should reuse the same plan instead of creating duplicates.
 	dayLocal := localDay(now, user.UTCOffsetMinutes)
 	if existing, err := s.repo.GetDayPlan(ctx, userID, dayLocal); err == nil {
 		return existing, nil
@@ -295,6 +297,9 @@ func (s *Service) PickReminder(ctx context.Context, userID int64, now time.Time)
 		return nil, nil, domain.ErrPlanNotReady
 	}
 
+	// Within one cycle, each selected item can be reminded at most once.
+	// When every selected item has been touched in current cycle, increment cycle
+	// and start a new pass over remaining not-completed items.
 	candidates := reminderCandidates(plan)
 	if len(candidates) == 0 {
 		plan.Cycle++
@@ -455,6 +460,7 @@ func NormalizeClock(input string) (string, error) {
 }
 
 func localDay(now time.Time, utcOffsetMinutes int) string {
+	// Persist day boundaries using user's local date, not server timezone.
 	return now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute).Format("2006-01-02")
 }
 
@@ -474,6 +480,7 @@ func reminderCandidates(plan *domain.DayPlan) []int {
 		if !item.Selected || item.Completed {
 			continue
 		}
+		// reminder_cycle stores the last cycle in which this item was pinged.
 		if item.ReminderCycle < plan.Cycle {
 			candidates = append(candidates, i)
 		}

@@ -63,6 +63,7 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 
 	chatID := update.Message.Chat.ID
 	userText := strings.TrimSpace(update.Message.Text)
+	// Text input is interpreted through per-chat state machine stored in SessionStore.
 	session := r.sessions.Get(chatID)
 	if session.State != stateIdle {
 		r.logMessageEvent("handling session text input", update.Message, "session_state", session.State, "text_length", len(userText))
@@ -74,17 +75,17 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			s.State = stateRegisterOffset
 			s.Name = userText
 		})
-		r.sendMessage(ctx, chatID, "Напиши смещение UTC в формате `+03:00`, `-05:00` или `UTC`.", nil)
+		r.sendMessage(ctx, chatID, "🌍 Напиши смещение UTC в формате `+03:00`, `-05:00` или `UTC`.", nil)
 	case stateRegisterOffset:
 		if _, err := service.ParseUTCOffset(userText); err != nil {
-			r.sendMessage(ctx, chatID, "Не смог распознать UTC offset. Пример: `+03:00`.", nil)
+			r.sendMessage(ctx, chatID, "❌ Не смог распознать UTC offset. Пример: `+03:00`.", nil)
 			return
 		}
 		r.sessions.Update(chatID, func(s *Session) {
 			s.State = stateRegisterMorning
 			s.UTCOffset = userText
 		})
-		r.sendMessage(ctx, chatID, "Во сколько начинать утро? Формат `HH:MM`, например `08:30`.", nil)
+		r.sendMessage(ctx, chatID, "🌅 Во сколько начинать утро? Формат `HH:MM`, например `08:30`.", nil)
 	case stateRegisterMorning:
 		draft := r.sessions.Get(chatID)
 		user, err := r.service.RegisterUser(ctx, service.RegistrationInput{
@@ -95,7 +96,7 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			MorningTime:    userText,
 		})
 		if err != nil {
-			r.sendMessage(ctx, chatID, "Не получилось завершить регистрацию: "+err.Error(), nil)
+			r.sendMessage(ctx, chatID, "❌ Не получилось завершить регистрацию: "+err.Error(), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
@@ -108,11 +109,11 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			return
 		}
 		if _, err := r.service.AddActivity(ctx, user.ID, userText); err != nil {
-			r.sendMessage(ctx, chatID, "Не получилось добавить активность: "+err.Error(), nil)
+			r.sendMessage(ctx, chatID, "❌ Не получилось добавить активность: "+err.Error(), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.showActivities(ctx, chatID, user.ID, "Активность добавлена.")
+		r.showActivities(ctx, chatID, user.ID, "✅ Активность добавлена.")
 	case stateEditActivity:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -120,11 +121,11 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			return
 		}
 		if err := r.service.UpdateActivity(ctx, user.ID, session.EditActivityID, userText); err != nil {
-			r.sendMessage(ctx, chatID, "Не получилось обновить активность: "+err.Error(), nil)
+			r.sendMessage(ctx, chatID, "❌ Не получилось обновить активность: "+err.Error(), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.showActivities(ctx, chatID, user.ID, "Название обновлено.")
+		r.showActivities(ctx, chatID, user.ID, "✅ Название обновлено.")
 	case stateUpdateMorning:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -132,11 +133,11 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			return
 		}
 		if err := r.service.UpdateSettings(ctx, user.ID, userText, user.ReminderIntervalMinutes); err != nil {
-			r.sendMessage(ctx, chatID, "Не получилось обновить время утра: "+err.Error(), nil)
+			r.sendMessage(ctx, chatID, "❌ Не получилось обновить время утра: "+err.Error(), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.sendMessage(ctx, chatID, "Время утра обновлено.", r.mainMenu)
+		r.sendMessage(ctx, chatID, "✅ Время утра обновлено.", r.mainMenu)
 	case stateUpdateReminder:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -145,15 +146,15 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 		}
 		minutes, err := strconv.Atoi(userText)
 		if err != nil || minutes <= 0 {
-			r.sendMessage(ctx, chatID, "Нужны целые минуты, например `30`.", nil)
+			r.sendMessage(ctx, chatID, "❗ Нужны целые минуты, например `30`.", nil)
 			return
 		}
 		if err := r.service.UpdateSettings(ctx, user.ID, user.MorningTime, minutes); err != nil {
-			r.sendMessage(ctx, chatID, "Не получилось обновить интервал: "+err.Error(), nil)
+			r.sendMessage(ctx, chatID, "❌ Не получилось обновить интервал: "+err.Error(), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.sendMessage(ctx, chatID, "Интервал напоминаний обновлён.", r.mainMenu)
+		r.sendMessage(ctx, chatID, "✅ Интервал напоминаний обновлён.", r.mainMenu)
 	default:
 		r.sendMessage(ctx, chatID, helpText(), r.mainMenu)
 	}
@@ -170,14 +171,14 @@ func (r *Router) handleStart(ctx context.Context, _ *bot.Bot, update *models.Upd
 		return
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
-		r.sendMessage(ctx, chatID, "Не получилось проверить регистрацию.", nil)
+		r.sendMessage(ctx, chatID, "❌ Не получилось проверить регистрацию.", nil)
 		return
 	}
 
 	r.sessions.Update(chatID, func(s *Session) {
 		*s = Session{State: stateRegisterName}
 	})
-	r.sendMessage(ctx, chatID, "Давай зарегистрируемся. Как тебя зовут?", nil)
+	r.sendMessage(ctx, chatID, "👋 Давай зарегистрируемся. Как тебя зовут?", nil)
 }
 
 func (r *Router) handleTodayCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
@@ -195,7 +196,7 @@ func (r *Router) handleTodayCommand(ctx context.Context, _ *bot.Bot, update *mod
 		plan, err = r.service.StartMorningPlan(ctx, user.ID, now)
 	}
 	if err != nil {
-		r.sendMessage(ctx, chatID, "Не получилось открыть план дня: "+err.Error(), r.mainMenu)
+		r.sendMessage(ctx, chatID, "❌ Не получилось открыть план дня: "+err.Error(), r.mainMenu)
 		return
 	}
 
@@ -215,7 +216,7 @@ func (r *Router) handleActivitiesCommand(ctx context.Context, _ *bot.Bot, update
 		r.handleRegistrationRequired(ctx, chatID)
 		return
 	}
-	r.showActivities(ctx, chatID, user.ID, "Твои активности.")
+	r.showActivities(ctx, chatID, user.ID, "🧩 Твои активности.")
 }
 
 func (r *Router) handleSettingsCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
@@ -226,7 +227,7 @@ func (r *Router) handleSettingsCommand(ctx context.Context, _ *bot.Bot, update *
 		r.handleRegistrationRequired(ctx, chatID)
 		return
 	}
-	r.sendMessage(ctx, chatID, "Что обновить?", buildSettingsKeyboard())
+	r.sendMessage(ctx, chatID, "⚙️ Что обновить?", buildSettingsKeyboard())
 }
 
 func (r *Router) handleStatsCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
@@ -240,12 +241,12 @@ func (r *Router) handleStatsCommand(ctx context.Context, _ *bot.Bot, update *mod
 
 	stats, err := r.service.BuildStats(ctx, user.ID)
 	if err != nil {
-		r.sendMessage(ctx, chatID, "Не получилось собрать статистику.", r.mainMenu)
+		r.sendMessage(ctx, chatID, "❌ Не получилось собрать статистику.", r.mainMenu)
 		return
 	}
 
 	text := fmt.Sprintf(
-		"Статистика:\n- дней с планом: %d\n- завершённых дней: %d\n- выбранных активностей: %d\n- завершённых активностей: %d\n- пропущенных активностей: %d\n- completion rate: %.0f%%",
+		"📊 Статистика:\n- дней с планом: %d\n- завершённых дней: %d\n- выбранных активностей: %d\n- завершённых активностей: %d\n- пропущенных активностей: %d\n- completion rate: %.0f%%",
 		stats.DaysWithPlan,
 		stats.CompletedDays,
 		stats.SelectedActivities,
@@ -272,7 +273,7 @@ func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update 
 		r.sessions.Update(chatID, func(s *Session) {
 			*s = Session{State: stateAddActivity}
 		})
-		r.sendMessage(ctx, chatID, "Напиши название новой активности.", nil)
+		r.sendMessage(ctx, chatID, "✍️ Напиши название новой активности.", nil)
 	case strings.HasPrefix(data, "activity:edit:"):
 		activityID, err := parseID(data)
 		if err != nil {
@@ -281,17 +282,17 @@ func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update 
 		r.sessions.Update(chatID, func(s *Session) {
 			*s = Session{State: stateEditActivity, EditActivityID: activityID}
 		})
-		r.sendMessage(ctx, chatID, "Пришли новое название активности.", nil)
+		r.sendMessage(ctx, chatID, "✍️ Пришли новое название активности.", nil)
 	case strings.HasPrefix(data, "activity:delete:"):
 		activityID, err := parseID(data)
 		if err != nil {
 			return
 		}
 		if err := r.service.DeleteActivity(ctx, user.ID, activityID); err != nil {
-			r.sendMessage(ctx, chatID, "Не получилось удалить активность: "+err.Error(), nil)
+			r.sendMessage(ctx, chatID, "❌ Не получилось удалить активность: "+err.Error(), nil)
 			return
 		}
-		r.editMessage(ctx, chatID, messageID, "Активность удалена.\n\n"+activitiesText(r.mustActivities(ctx, user.ID)), buildActivitiesKeyboard(r.mustActivities(ctx, user.ID)))
+		r.editMessage(ctx, chatID, messageID, "🗑 Активность удалена.\n\n"+activitiesText(r.mustActivities(ctx, user.ID)), buildActivitiesKeyboard(r.mustActivities(ctx, user.ID)))
 	}
 }
 
@@ -315,7 +316,7 @@ func (r *Router) handlePlanCallback(ctx context.Context, _ *bot.Bot, update *mod
 		}
 		plan, err := r.service.TogglePlanItem(ctx, user.ID, activityID, now)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "Не получилось обновить выбор: "+err.Error(), nil)
+			r.sendMessage(ctx, chatID, "❌ Не получилось обновить выбор: "+err.Error(), nil)
 			return
 		}
 		r.logger.Info("plan item toggled", "user_id", user.ID, "chat_id", chatID, "activity_id", activityID, "selected_count", countSelectedItems(plan))
@@ -323,7 +324,7 @@ func (r *Router) handlePlanCallback(ctx context.Context, _ *bot.Bot, update *mod
 	case data == "plan:finalize":
 		plan, err := r.service.FinalizePlan(ctx, user.ID, now)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "Не получилось зафиксировать план: "+err.Error(), nil)
+			r.sendMessage(ctx, chatID, "❌ Не получилось зафиксировать план: "+err.Error(), nil)
 			return
 		}
 		r.logger.Info("plan finalized", "user_id", user.ID, "chat_id", chatID, "selected_count", countSelectedItems(plan), "completed_count", countCompletedItems(plan))
@@ -331,7 +332,7 @@ func (r *Router) handlePlanCallback(ctx context.Context, _ *bot.Bot, update *mod
 	case data == "plan:all":
 		plan, err := r.service.SelectAllAndFinalize(ctx, user.ID, now)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "Не получилось выбрать все активности: "+err.Error(), nil)
+			r.sendMessage(ctx, chatID, "❌ Не получилось выбрать все активности: "+err.Error(), nil)
 			return
 		}
 		r.logger.Info("plan finalized with all activities", "user_id", user.ID, "chat_id", chatID, "selected_count", countSelectedItems(plan))
@@ -356,7 +357,7 @@ func (r *Router) handleDoneCallback(ctx context.Context, _ *bot.Bot, update *mod
 
 	plan, err := r.service.MarkActivityDone(ctx, user.ID, activityID, time.Now().UTC())
 	if err != nil {
-		r.sendMessage(ctx, chatID, "Не получилось отметить активность: "+err.Error(), nil)
+		r.sendMessage(ctx, chatID, "❌ Не получилось отметить активность: "+err.Error(), nil)
 		return
 	}
 
@@ -378,12 +379,12 @@ func (r *Router) handleSettingsCallback(ctx context.Context, _ *bot.Bot, update 
 		r.sessions.Update(chatID, func(s *Session) {
 			*s = Session{State: stateUpdateMorning}
 		})
-		r.sendMessage(ctx, chatID, "Пришли новое время утра в формате `HH:MM`.", nil)
+		r.sendMessage(ctx, chatID, "⏰ Пришли новое время утра в формате `HH:MM`.", nil)
 	case "settings:interval":
 		r.sessions.Update(chatID, func(s *Session) {
 			*s = Session{State: stateUpdateReminder}
 		})
-		r.sendMessage(ctx, chatID, "Пришли новый интервал напоминаний в минутах, например `30`.", nil)
+		r.sendMessage(ctx, chatID, "🔁 Пришли новый интервал напоминаний в минутах, например `30`.", nil)
 	}
 }
 
@@ -403,7 +404,7 @@ func (r *Router) registeredUser(ctx context.Context, telegramUserID int64) (*dom
 func (r *Router) showActivities(ctx context.Context, chatID, userID int64, prefix string) {
 	activities, err := r.service.ListActivities(ctx, userID)
 	if err != nil {
-		r.sendMessage(ctx, chatID, "Не получилось получить список активностей.", r.mainMenu)
+		r.sendMessage(ctx, chatID, "❌ Не получилось получить список активностей.", r.mainMenu)
 		return
 	}
 	r.sendMessage(ctx, chatID, prefix+"\n\n"+activitiesText(activities), buildActivitiesKeyboard(activities))
@@ -422,7 +423,7 @@ func (r *Router) handleRegistrationRequired(ctx context.Context, chatID int64) {
 	r.sessions.Update(chatID, func(s *Session) {
 		*s = Session{State: stateRegisterName}
 	})
-	r.sendMessage(ctx, chatID, "Сначала нужна регистрация. Как тебя зовут?", nil)
+	r.sendMessage(ctx, chatID, "📝 Сначала нужна регистрация. Как тебя зовут?", nil)
 }
 
 func (r *Router) sendMessage(ctx context.Context, chatID int64, text string, markup models.ReplyMarkup) {
@@ -456,6 +457,8 @@ func (r *Router) answerCallback(ctx context.Context, callbackID string) {
 }
 
 func callbackIdentity(update *models.Update) (chatID int64, userID int64, messageID int) {
+	// For callback queries, ownership checks and message edits rely on the tuple
+	// (chat id, telegram user id, message id).
 	return update.CallbackQuery.Message.Message.Chat.ID, update.CallbackQuery.From.ID, update.CallbackQuery.Message.Message.ID
 }
 
@@ -504,22 +507,22 @@ func parseID(data string) (int64, error) {
 
 func welcomeText(user *domain.User) string {
 	return fmt.Sprintf(
-		"Привет, %s.\nЯ помогу вести утренние активности, план дня и напоминания.\nИспользуй меню ниже или команду /today.",
+		"👋 Привет, %s.\nЯ помогу вести утренние активности, план дня и напоминания.\nИспользуй меню ниже или команду /today.",
 		user.Name,
 	)
 }
 
 func helpText() string {
-	return "Доступно меню: Сегодня, Активности, Настройки, Статистика. Для первого запуска используй /start."
+	return "Доступно меню: 📅 Сегодня, 🧩 Активности, ⚙️ Настройки, 📊 Статистика. Для первого запуска используй /start."
 }
 
 func activitiesText(activities []domain.Activity) string {
 	if len(activities) == 0 {
-		return "Список пуст. Добавь первую активность."
+		return "🗒 Список пуст. Добавь первую активность."
 	}
 
 	lines := make([]string, 0, len(activities)+1)
-	lines = append(lines, "Текущий список:")
+	lines = append(lines, "🧩 Текущий список:")
 	for i, activity := range activities {
 		lines = append(lines, fmt.Sprintf("%d. %s", i+1, activity.Title))
 	}
@@ -528,8 +531,8 @@ func activitiesText(activities []domain.Activity) string {
 
 func selectionText(plan *domain.DayPlan) string {
 	lines := []string{
-		"Отметь, что сегодня делать не будешь.",
-		"По умолчанию выбрано всё.",
+		"✅ Отметь, что сегодня делать не будешь.",
+		"📌 По умолчанию выбрано всё.",
 	}
 	for _, item := range plan.Items {
 		status := "делаю"
@@ -557,18 +560,18 @@ func progressText(plan *domain.DayPlan) string {
 	}
 
 	lines := []string{
-		fmt.Sprintf("Статус дня: %s", string(plan.Status)),
-		fmt.Sprintf("Готово: %d", len(completed)),
-		fmt.Sprintf("Осталось: %d", len(remaining)),
+		fmt.Sprintf("📍 Статус дня: %s", string(plan.Status)),
+		fmt.Sprintf("✅ Готово: %d", len(completed)),
+		fmt.Sprintf("⏳ Осталось: %d", len(remaining)),
 	}
 	if len(completed) > 0 {
-		lines = append(lines, "Сделано: "+strings.Join(completed, ", "))
+		lines = append(lines, "🎯 Сделано: "+strings.Join(completed, ", "))
 	}
 	if len(remaining) > 0 {
-		lines = append(lines, "Осталось: "+strings.Join(remaining, ", "))
+		lines = append(lines, "📌 Осталось: "+strings.Join(remaining, ", "))
 	}
 	if len(skipped) > 0 {
-		lines = append(lines, "Пропуск: "+strings.Join(skipped, ", "))
+		lines = append(lines, "⏭ Пропуск: "+strings.Join(skipped, ", "))
 	}
 	return strings.Join(lines, "\n")
 }

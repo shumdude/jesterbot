@@ -245,6 +245,8 @@ func (r *Repository) SaveDayPlan(ctx context.Context, plan *domain.DayPlan) erro
 		}
 	}()
 
+	// Plan header and all items are persisted atomically so scheduler and handlers
+	// never observe a mixed state (updated plan without updated items or vice versa).
 	if plan.ID == 0 {
 		result, execErr := tx.ExecContext(ctx, `
 			INSERT INTO daily_plans (
@@ -293,6 +295,8 @@ func (r *Repository) SaveDayPlan(ctx context.Context, plan *domain.DayPlan) erro
 
 	for i := range plan.Items {
 		item := &plan.Items[i]
+		// Rewrites existing (plan_id, activity_id) rows and inserts new ones.
+		// This keeps SaveDayPlan idempotent for repeated calls with same snapshot.
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO daily_plan_items (
 				plan_id, activity_id, title_snapshot, selected, completed, reminder_cycle, completed_at, created_at, updated_at

@@ -81,6 +81,8 @@ func (s *Scheduler) handleMorning(ctx context.Context, user domain.User, now tim
 		return
 	}
 
+	// Only send the morning prompt on the exact minute when the plan was created
+	// to avoid duplicate sends during the same minute across repeated ticks.
 	if plan.MorningSentAt == nil || !sameMinute(*plan.MorningSentAt, now) {
 		return
 	}
@@ -145,14 +147,14 @@ func reminderText(item *domain.DayPlanItem, plan *domain.DayPlan) string {
 	}
 
 	lines := []string{
-		"Напоминание.",
-		fmt.Sprintf("Сейчас лучше сделать: %s", item.TitleSnapshot),
-		fmt.Sprintf("Осталось активностей: %d", pending),
+		"🔔 Напоминание.",
+		fmt.Sprintf("👉 Сейчас лучше сделать: %s", item.TitleSnapshot),
+		fmt.Sprintf("📌 Осталось активностей: %d", pending),
 	}
 
 	return strings.Join(lines, "\n")
 }
 
 func completionMessage(plan *domain.DayPlan) string {
-	return "Все активности на сегодня закрыты. Отличная работа."
+	return "🎉 Все активности на сегодня закрыты. Отличная работа."
 }
