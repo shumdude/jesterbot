@@ -1,6 +1,10 @@
 package telegram
 
-import "sync"
+import (
+	"sync"
+
+	"jesterbot/internal/domain"
+)
 
 type SessionState string
 
@@ -11,18 +15,24 @@ const (
 	stateRegisterOffset  SessionState = "register_offset"
 	stateRegisterMorning SessionState = "register_morning"
 	// Activity management states.
-	stateAddActivity     SessionState = "add_activity"
-	stateEditActivity    SessionState = "edit_activity"
+	stateAddActivity    SessionState = "add_activity"
+	stateEditActivity   SessionState = "edit_activity"
+	stateAddOneOffTitle SessionState = "add_one_off_title"
+	stateAddOneOffItems SessionState = "add_one_off_items"
 	// Settings update states.
-	stateUpdateMorning   SessionState = "update_morning"
-	stateUpdateReminder  SessionState = "update_reminder"
+	stateUpdateMorning        SessionState = "update_morning"
+	stateUpdateReminder       SessionState = "update_reminder"
+	stateUpdateOneOffReminder SessionState = "update_one_off_reminder"
+	stateUpdateTickInterval   SessionState = "update_tick_interval"
 )
 
 type Session struct {
-	State          SessionState
-	Name           string
-	UTCOffset      string
-	EditActivityID int64
+	State              SessionState
+	Name               string
+	UTCOffset          string
+	EditActivityID     int64
+	OneOffTaskTitle    string
+	OneOffTaskPriority domain.OneOffTaskPriority
 }
 
 type SessionStore struct {

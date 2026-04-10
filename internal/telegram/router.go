@@ -32,10 +32,11 @@ func NewRouter(logger *slog.Logger, token string, pollTimeout time.Duration, wor
 		sessions: NewSessionStore(),
 	}
 
+	httpTimeout := telegramHTTPClientTimeout(pollTimeout)
 	options := []bot.Option{
 		bot.WithDefaultHandler(router.handleDefault),
 		bot.WithWorkers(workers),
-		bot.WithHTTPClient(pollTimeout, &http.Client{Timeout: pollTimeout + 5*time.Second}),
+		bot.WithHTTPClient(pollTimeout, &http.Client{Timeout: httpTimeout}),
 	}
 
 	b, err := bot.New(token, options...)
@@ -108,12 +109,41 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			r.handleRegistrationRequired(ctx, chatID)
 			return
 		}
-		if _, err := r.service.AddActivity(ctx, user.ID, userText); err != nil {
+		activities, err := r.service.AddActivities(ctx, user.ID, userText)
+		if err != nil {
 			r.sendMessage(ctx, chatID, "❌ Не получилось добавить активность: "+err.Error(), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.showActivities(ctx, chatID, user.ID, "✅ Активность добавлена.")
+		prefix := "✅ Активность добавлена."
+		if len(activities) > 1 {
+			prefix = fmt.Sprintf("✅ Добавлено активностей: %d.", len(activities))
+		}
+		r.showActivities(ctx, chatID, user.ID, prefix)
+	case stateAddOneOffTitle:
+		if strings.TrimSpace(userText) == "" {
+			r.sendMessage(ctx, chatID, "❗ Название разового дела не должно быть пустым.", nil)
+			return
+		}
+		r.sessions.Update(chatID, func(s *Session) {
+			s.State = stateAddOneOffTitle
+			s.OneOffTaskTitle = userText
+		})
+		r.sendMessage(ctx, chatID, "🚦 Выбери приоритет разового дела.", buildOneOffPriorityKeyboard())
+	case stateAddOneOffItems:
+		user, err := r.registeredUser(ctx, update.Message.From.ID)
+		if err != nil {
+			r.handleRegistrationRequired(ctx, chatID)
+			return
+		}
+		draft := r.sessions.Get(chatID)
+		task, err := r.service.CreateOneOffTask(ctx, user.ID, draft.OneOffTaskTitle, draft.OneOffTaskPriority, parseOneOffChecklistInput(userText))
+		if err != nil {
+			r.sendMessage(ctx, chatID, "❌ Не получилось создать разовое дело: "+err.Error(), nil)
+			return
+		}
+		r.sessions.Clear(chatID)
+		r.showOneOffTasks(ctx, chatID, user.ID, "✅ Разовое дело добавлено: "+task.Title)
 	case stateEditActivity:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -155,6 +185,40 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 		}
 		r.sessions.Clear(chatID)
 		r.sendMessage(ctx, chatID, "✅ Интервал напоминаний обновлён.", r.mainMenu)
+	case stateUpdateOneOffReminder:
+		user, err := r.registeredUser(ctx, update.Message.From.ID)
+		if err != nil {
+			r.handleRegistrationRequired(ctx, chatID)
+			return
+		}
+		low, medium, high, err := parseOneOffReminderSettingsInput(userText)
+		if err != nil {
+			r.sendMessage(ctx, chatID, "❗ Нужны три положительных значения в формате `60,30,10`.", nil)
+			return
+		}
+		if err := r.service.UpdateOneOffReminderSettings(ctx, user.ID, low, medium, high); err != nil {
+			r.sendMessage(ctx, chatID, "❌ Не получилось обновить интервалы разовых дел: "+err.Error(), nil)
+			return
+		}
+		r.sessions.Clear(chatID)
+		r.sendMessage(ctx, chatID, "✅ Интервалы напоминаний для разовых дел обновлены.", r.mainMenu)
+	case stateUpdateTickInterval:
+		user, err := r.registeredUser(ctx, update.Message.From.ID)
+		if err != nil {
+			r.handleRegistrationRequired(ctx, chatID)
+			return
+		}
+		minutes, err := strconv.Atoi(userText)
+		if err != nil || minutes <= 0 {
+			r.sendMessage(ctx, chatID, "❗ Нужны целые положительные минуты, например `1`.", nil)
+			return
+		}
+		if err := r.service.UpdateUserTickInterval(ctx, user.ID, minutes); err != nil {
+			r.sendMessage(ctx, chatID, "❌ Не получилось обновить частоту проверки: "+err.Error(), nil)
+			return
+		}
+		r.sessions.Clear(chatID)
+		r.sendMessage(ctx, chatID, "✅ Частота проверки расписания обновлена.", r.mainMenu)
 	default:
 		r.sendMessage(ctx, chatID, helpText(), r.mainMenu)
 	}
@@ -196,7 +260,7 @@ func (r *Router) handleTodayCommand(ctx context.Context, _ *bot.Bot, update *mod
 		plan, err = r.service.StartMorningPlan(ctx, user.ID, now)
 	}
 	if err != nil {
-		r.sendMessage(ctx, chatID, "❌ Не получилось открыть план дня: "+err.Error(), r.mainMenu)
+		r.sendMessage(ctx, chatID, todayPlanErrorText(err), r.mainMenu)
 		return
 	}
 
@@ -245,16 +309,7 @@ func (r *Router) handleStatsCommand(ctx context.Context, _ *bot.Bot, update *mod
 		return
 	}
 
-	text := fmt.Sprintf(
-		"📊 Статистика:\n- дней с планом: %d\n- завершённых дней: %d\n- выбранных активностей: %d\n- завершённых активностей: %d\n- пропущенных активностей: %d\n- completion rate: %.0f%%",
-		stats.DaysWithPlan,
-		stats.CompletedDays,
-		stats.SelectedActivities,
-		stats.CompletedActivities,
-		stats.SkippedActivities,
-		stats.CompletionRate*100,
-	)
-	r.sendMessage(ctx, chatID, text, r.mainMenu)
+	r.sendMessage(ctx, chatID, statsText(stats), r.mainMenu)
 }
 
 func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
@@ -269,11 +324,13 @@ func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update 
 
 	data := update.CallbackQuery.Data
 	switch {
+	case data == "activity:back":
+		r.editMessage(ctx, chatID, messageID, "⬅️ Возврат в главное меню.\nВыбери следующий раздел в меню ниже.", emptyInlineKeyboard())
 	case data == "activity:add":
 		r.sessions.Update(chatID, func(s *Session) {
 			*s = Session{State: stateAddActivity}
 		})
-		r.sendMessage(ctx, chatID, "✍️ Напиши название новой активности.", nil)
+		r.sendMessage(ctx, chatID, "✍️ Пришли одну активность или список через запятую. Пример: `Stretch, Read, Walk`.", nil)
 	case strings.HasPrefix(data, "activity:edit:"):
 		activityID, err := parseID(data)
 		if err != nil {
@@ -385,15 +442,47 @@ func (r *Router) handleSettingsCallback(ctx context.Context, _ *bot.Bot, update 
 			*s = Session{State: stateUpdateReminder}
 		})
 		r.sendMessage(ctx, chatID, "🔁 Пришли новый интервал напоминаний в минутах, например `30`.", nil)
+	case "settings:tick":
+		user, err := r.registeredUser(ctx, update.CallbackQuery.From.ID)
+		if err != nil {
+			r.handleRegistrationRequired(ctx, chatID)
+			return
+		}
+		minutes, err := r.service.GetUserTickInterval(ctx, user.ID)
+		if err != nil {
+			r.sendMessage(ctx, chatID, "❌ Не получилось получить частоту проверки.", nil)
+			return
+		}
+		r.sessions.Update(chatID, func(s *Session) {
+			*s = Session{State: stateUpdateTickInterval}
+		})
+		r.sendMessage(ctx, chatID, fmt.Sprintf("🕒 Пришли частоту проверки расписания в минутах. Текущее значение: `%d`.", minutes), nil)
+	case "settings:oneoff":
+		user, err := r.registeredUser(ctx, update.CallbackQuery.From.ID)
+		if err != nil {
+			r.handleRegistrationRequired(ctx, chatID)
+			return
+		}
+		settings, err := r.service.GetOneOffReminderSettings(ctx, user.ID)
+		if err != nil {
+			r.sendMessage(ctx, chatID, "❌ Не получилось получить интервалы разовых дел.", nil)
+			return
+		}
+		r.sessions.Update(chatID, func(s *Session) {
+			*s = Session{State: stateUpdateOneOffReminder}
+		})
+		r.sendMessage(ctx, chatID, oneOffReminderSettingsPrompt(settings), nil)
 	}
 }
 
 func (r *Router) registerHandlers() {
 	r.bot.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, r.handleStart)
 	r.bot.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, r.handleStart)
+	r.bot.RegisterHandler(bot.HandlerTypeMessageText, "📝 Разовые дела", bot.MatchTypeExact, r.handleOneOffTasksCommand)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "activity:", bot.MatchTypePrefix, r.handleActivityCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "plan:", bot.MatchTypePrefix, r.handlePlanCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "done:", bot.MatchTypePrefix, r.handleDoneCallback)
+	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "oneoff:", bot.MatchTypePrefix, r.handleOneOffCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "settings:", bot.MatchTypePrefix, r.handleSettingsCallback)
 }
 
@@ -497,6 +586,18 @@ func countCompletedItems(plan *domain.DayPlan) int {
 	return count
 }
 
+func telegramHTTPClientTimeout(pollTimeout time.Duration) time.Duration {
+	httpTimeout := pollTimeout + 30*time.Second
+	if httpTimeout < time.Minute {
+		return time.Minute
+	}
+	return httpTimeout
+}
+
+func emptyInlineKeyboard() models.ReplyMarkup {
+	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
+}
+
 func parseID(data string) (int64, error) {
 	parts := strings.Split(data, ":")
 	if len(parts) == 0 {
@@ -513,7 +614,7 @@ func welcomeText(user *domain.User) string {
 }
 
 func helpText() string {
-	return "Доступно меню: 📅 Сегодня, 🧩 Активности, ⚙️ Настройки, 📊 Статистика. Для первого запуска используй /start."
+	return "Доступно меню: 📅 Сегодня, 🧩 Активности, 📝 Разовые дела, ⚙️ Настройки, 📊 Статистика. Для первого запуска используй /start."
 }
 
 func activitiesText(activities []domain.Activity) string {
@@ -544,14 +645,51 @@ func selectionText(plan *domain.DayPlan) string {
 	return strings.Join(lines, "\n")
 }
 
+func todayPlanErrorText(err error) string {
+	if errors.Is(err, domain.ErrNoActivities) {
+		return "🧩 Список активностей пока пуст. Сначала добавь хотя бы одну активность в разделе «Активности»."
+	}
+	return "❌ Не получилось открыть план дня: " + err.Error()
+}
+
+func statsText(stats domain.DailyStats) string {
+	return fmt.Sprintf(
+		"📊 Статистика:\n- дней с планом: %d\n- завершённых дней: %d\n- выбранных активностей: %d\n- завершённых активностей: %d\n- пропущенных активностей: %d\n- процент выполнения: %.0f%%\n- разовых дел: %d\n- завершённых разовых дел: %d\n- активных разовых дел: %d\n- чекбоксов в разовых делах: %d\n- завершённых чекбоксов: %d\n- процент выполнения разовых дел: %.0f%%",
+		stats.DaysWithPlan,
+		stats.CompletedDays,
+		stats.SelectedActivities,
+		stats.CompletedActivities,
+		stats.SkippedActivities,
+		stats.CompletionRate*100,
+		stats.OneOffTasks,
+		stats.CompletedOneOffTasks,
+		stats.PendingOneOffTasks,
+		stats.OneOffChecklistItems,
+		stats.CompletedOneOffChecklistItems,
+		stats.OneOffCompletionRate*100,
+	)
+}
+
+func planStatusLabel(status domain.PlanStatus) string {
+	switch status {
+	case domain.PlanStatusAwaitingSelection:
+		return "ожидает выбора"
+	case domain.PlanStatusActive:
+		return "в процессе"
+	case domain.PlanStatusCompleted:
+		return "завершён"
+	default:
+		return string(status)
+	}
+}
+
 func progressText(plan *domain.DayPlan) string {
 	completed := make([]string, 0)
 	remaining := make([]string, 0)
-	skipped := make([]string, 0)
 	for _, item := range plan.Items {
 		switch {
 		case !item.Selected:
-			skipped = append(skipped, item.TitleSnapshot)
+			continue
 		case item.Completed:
 			completed = append(completed, item.TitleSnapshot)
 		default:
@@ -560,7 +698,7 @@ func progressText(plan *domain.DayPlan) string {
 	}
 
 	lines := []string{
-		fmt.Sprintf("📍 Статус дня: %s", string(plan.Status)),
+		fmt.Sprintf("📍 Статус дня: %s", planStatusLabel(plan.Status)),
 		fmt.Sprintf("✅ Готово: %d", len(completed)),
 		fmt.Sprintf("⏳ Осталось: %d", len(remaining)),
 	}
@@ -569,9 +707,6 @@ func progressText(plan *domain.DayPlan) string {
 	}
 	if len(remaining) > 0 {
 		lines = append(lines, "📌 Осталось: "+strings.Join(remaining, ", "))
-	}
-	if len(skipped) > 0 {
-		lines = append(lines, "⏭ Пропуск: "+strings.Join(skipped, ", "))
 	}
 	return strings.Join(lines, "\n")
 }
