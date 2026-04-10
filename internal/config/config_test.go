@@ -11,6 +11,7 @@ func TestLoadReadsDotEnvFromWorkingDirectoryChain(t *testing.T) {
 		"JESTERBOT_BOT_TOKEN",
 		"JESTERBOT_DB_PATH",
 		"JESTERBOT_WORKERS",
+		"JESTERBOT_DEFAULT_REMINDER_MINUTES",
 	)
 
 	rootDir := t.TempDir()
@@ -21,7 +22,7 @@ func TestLoadReadsDotEnvFromWorkingDirectoryChain(t *testing.T) {
 	writeTestFile(t, filepath.Join(cmdDir, ".env"), "JESTERBOT_DB_PATH=cmd.db\n")
 
 	workDir := filepath.Join(cmdDir, "jesterbot")
-	writeTestFile(t, filepath.Join(workDir, ".env"), "JESTERBOT_BOT_TOKEN=child-token\nJESTERBOT_WORKERS=7\n")
+	writeTestFile(t, filepath.Join(workDir, ".env"), "JESTERBOT_BOT_TOKEN=child-token\nJESTERBOT_WORKERS=7\nJESTERBOT_DEFAULT_REMINDER_MINUTES=5\n")
 
 	restoreWorkingDir(t, workDir)
 
@@ -36,8 +37,14 @@ func TestLoadReadsDotEnvFromWorkingDirectoryChain(t *testing.T) {
 	if cfg.DBPath != "cmd.db" {
 		t.Fatalf("unexpected db path: %q", cfg.DBPath)
 	}
-	if cfg.WorkerCount != 7 {
+	if cfg.WorkerCount != defaultWorkerCount {
 		t.Fatalf("unexpected worker count: %d", cfg.WorkerCount)
+	}
+	if cfg.DefaultReminderMinutes != defaultReminderMinute {
+		t.Fatalf("unexpected default reminder minutes: %d", cfg.DefaultReminderMinutes)
+	}
+	if cfg.PollTimeout != defaultPollTimeout {
+		t.Fatalf("unexpected poll timeout: %s", cfg.PollTimeout)
 	}
 }
 
