@@ -29,7 +29,6 @@ func New(logger *slog.Logger) (*App, error) {
 	logger.Info(
 		"configuration loaded",
 		"db_path", cfg.DBPath,
-		"tick_interval", cfg.TickInterval.String(),
 		"poll_timeout", cfg.PollTimeout.String(),
 		"worker_count", cfg.WorkerCount,
 		"default_reminder_minutes", cfg.DefaultReminderMinutes,
@@ -56,7 +55,7 @@ func New(logger *slog.Logger) (*App, error) {
 		DB:        db,
 		Service:   svc,
 		Telegram:  router,
-		Scheduler: telegram.NewScheduler(logger, cfg.TickInterval, svc, router),
+		Scheduler: telegram.NewScheduler(logger, svc, router),
 	}, nil
 }
 
@@ -64,7 +63,6 @@ func (a *App) Start(ctx context.Context) error {
 	a.Logger.Info(
 		"application bootstrap completed",
 		"db_path", a.Config.DBPath,
-		"tick_interval", a.Config.TickInterval.String(),
 		"poll_timeout", a.Config.PollTimeout.String(),
 		"worker_count", a.Config.WorkerCount,
 	)

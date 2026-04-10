@@ -13,7 +13,6 @@ import (
 
 const (
 	defaultDBPath         = "data/jesterbot.db"
-	defaultTickInterval   = time.Minute
 	defaultPollTimeout    = 10 * time.Second
 	defaultWorkerCount    = 4
 	defaultReminderMinute = 30
@@ -22,7 +21,6 @@ const (
 type Config struct {
 	BotToken               string
 	DBPath                 string
-	TickInterval           time.Duration
 	PollTimeout            time.Duration
 	WorkerCount            int
 	DefaultReminderMinutes int
@@ -36,10 +34,9 @@ func Load() (Config, error) {
 	cfg := Config{
 		BotToken:               os.Getenv("JESTERBOT_BOT_TOKEN"),
 		DBPath:                 envString("JESTERBOT_DB_PATH", defaultDBPath),
-		TickInterval:           envDuration("JESTERBOT_TICK_INTERVAL", defaultTickInterval),
 		PollTimeout:            envDuration("JESTERBOT_POLL_TIMEOUT", defaultPollTimeout),
-		WorkerCount:            envInt("JESTERBOT_WORKERS", defaultWorkerCount),
-		DefaultReminderMinutes: envInt("JESTERBOT_DEFAULT_REMINDER_MINUTES", defaultReminderMinute),
+		WorkerCount:            defaultWorkerCount,
+		DefaultReminderMinutes: defaultReminderMinute,
 	}
 
 	if cfg.BotToken == "" {
@@ -47,11 +44,11 @@ func Load() (Config, error) {
 	}
 
 	if cfg.WorkerCount <= 0 {
-		return Config{}, fmt.Errorf("JESTERBOT_WORKERS must be positive, got %d", cfg.WorkerCount)
+		return Config{}, fmt.Errorf("worker count must be positive, got %d", cfg.WorkerCount)
 	}
 
 	if cfg.DefaultReminderMinutes <= 0 {
-		return Config{}, fmt.Errorf("JESTERBOT_DEFAULT_REMINDER_MINUTES must be positive, got %d", cfg.DefaultReminderMinutes)
+		return Config{}, fmt.Errorf("default reminder minutes must be positive, got %d", cfg.DefaultReminderMinutes)
 	}
 
 	return cfg, nil

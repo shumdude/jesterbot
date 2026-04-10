@@ -145,22 +145,99 @@ func TestBuildStats(t *testing.T) {
 	}
 }
 
+func TestAddActivitiesBatch(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+
+	user := seedUser(repo)
+	created, err := svc.AddActivities(context.Background(), user.ID, " Stretch , Read\nWalk ,, ")
+	if err != nil {
+		t.Fatalf("add activities batch: %v", err)
+	}
+
+	if len(created) != 3 {
+		t.Fatalf("unexpected created len: %d", len(created))
+	}
+
+	activities, err := repo.ListActivities(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("list activities: %v", err)
+	}
+	if len(activities) != 3 {
+		t.Fatalf("unexpected stored activities len: %d", len(activities))
+	}
+
+	expectedTitles := []string{"Stretch", "Read", "Walk"}
+	for i, title := range expectedTitles {
+		if activities[i].Title != title {
+			t.Fatalf("unexpected title at %d: %q", i, activities[i].Title)
+		}
+		if activities[i].SortOrder != i+1 {
+			t.Fatalf("unexpected sort order at %d: %d", i, activities[i].SortOrder)
+		}
+	}
+}
+
+func TestUpdateSettingsReschedulesActivePlanReminder(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+
+	user := seedUser(repo)
+	activities := seedActivities(repo, user.ID, "Stretch")
+	_ = activities
+
+	startedAt := time.Date(2026, 4, 6, 5, 0, 0, 0, time.UTC)
+	if _, err := svc.StartMorningPlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("start morning plan: %v", err)
+	}
+	if _, err := svc.FinalizePlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("finalize plan: %v", err)
+	}
+
+	updatedAt := startedAt.Add(5 * time.Minute)
+	svc.now = func() time.Time { return updatedAt }
+	if err := svc.UpdateSettings(context.Background(), user.ID, user.MorningTime, 10); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+
+	plan, err := svc.GetTodayPlan(context.Background(), user.ID, updatedAt)
+	if err != nil {
+		t.Fatalf("get today plan: %v", err)
+	}
+	if plan.NextReminderAt == nil {
+		t.Fatal("expected next reminder to be rescheduled")
+	}
+
+	expectedReminder := updatedAt.Add(10 * time.Minute)
+	if !plan.NextReminderAt.Equal(expectedReminder) {
+		t.Fatalf("unexpected next reminder: got %v want %v", plan.NextReminderAt, expectedReminder)
+	}
+}
+
 type memoryRepo struct {
-	nextUserID     int64
-	nextActivityID int64
-	nextPlanID     int64
-	users          map[int64]domain.User
-	usersByTG      map[int64]int64
-	activities     map[int64][]domain.Activity
-	plans          map[int64]map[string]domain.DayPlan
+	nextUserID             int64
+	nextActivityID         int64
+	nextPlanID             int64
+	nextOneOffTaskID       int64
+	nextOneOffTaskItemID   int64
+	users                  map[int64]domain.User
+	usersByTG              map[int64]int64
+	activities             map[int64][]domain.Activity
+	plans                  map[int64]map[string]domain.DayPlan
+	oneOffTasks            map[int64]map[int64]domain.OneOffTask
+	oneOffReminderSettings map[int64]domain.OneOffReminderSettings
+	userTickIntervals      map[int64]int
 }
 
 func newMemoryRepo() *memoryRepo {
 	return &memoryRepo{
-		users:      make(map[int64]domain.User),
-		usersByTG:  make(map[int64]int64),
-		activities: make(map[int64][]domain.Activity),
-		plans:      make(map[int64]map[string]domain.DayPlan),
+		users:                  make(map[int64]domain.User),
+		usersByTG:              make(map[int64]int64),
+		activities:             make(map[int64][]domain.Activity),
+		plans:                  make(map[int64]map[string]domain.DayPlan),
+		oneOffTasks:            make(map[int64]map[int64]domain.OneOffTask),
+		oneOffReminderSettings: make(map[int64]domain.OneOffReminderSettings),
+		userTickIntervals:      make(map[int64]int),
 	}
 }
 

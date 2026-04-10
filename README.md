@@ -2,16 +2,18 @@
 
 Telegram bot for daily activity planning, reminders, and progress tracking.
 
-Planned work lives in [FUTURE.md](FUTURE.md).
+Planned work lives in [md-files/FUTURE.md](md-files/FUTURE.md).
 
 ## What Is Implemented
 
 - registration flow with FSM-like in-memory session states
 - activity CRUD
+- batch activity creation from a single message with comma/newline separators
 - morning daily plan creation with opt-out selection
 - progress tracking and done buttons
 - random reminder cycle without repeats until the cycle resets
-- settings for morning time and reminder interval
+- settings for morning time, reminder interval, per-user scheduler check frequency, and one-off reminder intervals
+- one-off tasks with checklist items, priority-based reminders, and dedicated reminder settings
 - SQLite persistence
 - automated tests for core logic and SQLite repository
 
@@ -56,20 +58,23 @@ Environment variables:
 
 - `JESTERBOT_BOT_TOKEN` - required Telegram bot token
 - `JESTERBOT_DB_PATH` - SQLite DB path, default `data/jesterbot.db`
-- `JESTERBOT_TICK_INTERVAL` - scheduler tick, default `1m`
 - `JESTERBOT_POLL_TIMEOUT` - long polling timeout, default `10s`
-- `JESTERBOT_WORKERS` - Telegram update workers, default `4`
-- `JESTERBOT_DEFAULT_REMINDER_MINUTES` - default reminder interval, default `30`
+
+Worker count and the initial reminder default are internal runtime defaults, not env knobs.
+
+Scheduler checks due work on a fixed internal one-minute cadence, while user-facing reminder behavior and per-user scheduler check frequency are controlled via bot settings.
 
 ## Validation
 
 Primary verification command:
 
 ```powershell
-$env:GOCACHE='C:\Users\thefi\.codex\memories\jesterbot-gocache'; go test ./...
+go test ./...
 ```
 
 ## Deployment
+
+Detailed deployment instructions live in [md-files/DEPLOY.md](md-files/DEPLOY.md).
 
 ### Docker
 
@@ -91,4 +96,4 @@ sudo systemctl enable --now jesterbot
 
 ## Future
 
-See [FUTURE.md](FUTURE.md) for the current implementation backlog.
+See [md-files/FUTURE.md](md-files/FUTURE.md) for the current implementation backlog.

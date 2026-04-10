@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -94,34 +95,52 @@ func (s *Service) UpdateSettings(ctx context.Context, userID int64, morningTime 
 		return fmt.Errorf("reminder interval must be positive")
 	}
 
-	return s.repo.UpdateUserSettings(ctx, userID, normalizedMorningTime, reminderIntervalMinutes)
+	if err := s.repo.UpdateUserSettings(ctx, userID, normalizedMorningTime, reminderIntervalMinutes); err != nil {
+		return err
+	}
+
+	return s.rescheduleActivePlanReminder(ctx, userID, reminderIntervalMinutes)
 }
 
 func (s *Service) AddActivity(ctx context.Context, userID int64, title string) (*domain.Activity, error) {
-	cleanTitle := strings.TrimSpace(title)
-	if cleanTitle == "" {
+	activities, err := s.AddActivities(ctx, userID, title)
+	if err != nil {
+		return nil, err
+	}
+
+	return &activities[0], nil
+}
+
+func (s *Service) AddActivities(ctx context.Context, userID int64, input string) ([]domain.Activity, error) {
+	titles := splitBatchTitles(input)
+	if len(titles) == 0 {
 		return nil, domain.ErrEmptyTitle
 	}
 
-	activities, err := s.repo.ListActivities(ctx, userID)
+	existingActivities, err := s.repo.ListActivities(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
 	now := s.now().UTC()
-	activity := &domain.Activity{
-		UserID:    userID,
-		Title:     cleanTitle,
-		SortOrder: len(activities) + 1,
-		CreatedAt: now,
-		UpdatedAt: now,
+	created := make([]domain.Activity, 0, len(titles))
+	for i, title := range titles {
+		activity := domain.Activity{
+			UserID:    userID,
+			Title:     title,
+			SortOrder: len(existingActivities) + i + 1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+
+		if err := s.repo.CreateActivity(ctx, &activity); err != nil {
+			return nil, err
+		}
+
+		created = append(created, activity)
 	}
 
-	if err := s.repo.CreateActivity(ctx, activity); err != nil {
-		return nil, err
-	}
-
-	return activity, nil
+	return created, nil
 }
 
 func (s *Service) UpdateActivity(ctx context.Context, userID, activityID int64, title string) error {
@@ -365,6 +384,10 @@ func (s *Service) BuildStats(ctx context.Context, userID int64) (domain.DailySta
 	if err != nil {
 		return domain.DailyStats{}, err
 	}
+	oneOffTasks, err := s.repo.ListOneOffTasks(ctx, userID)
+	if err != nil {
+		return domain.DailyStats{}, err
+	}
 
 	stats := domain.DailyStats{}
 	currentStreak := 0
@@ -394,6 +417,23 @@ func (s *Service) BuildStats(ctx context.Context, userID int64) (domain.DailySta
 
 	if stats.SelectedActivities > 0 {
 		stats.CompletionRate = float64(stats.CompletedActivities) / float64(stats.SelectedActivities)
+	}
+	for _, task := range oneOffTasks {
+		stats.OneOffTasks++
+		if task.Status == domain.OneOffTaskStatusCompleted {
+			stats.CompletedOneOffTasks++
+		} else {
+			stats.PendingOneOffTasks++
+		}
+		for _, item := range task.Items {
+			stats.OneOffChecklistItems++
+			if item.Completed {
+				stats.CompletedOneOffChecklistItems++
+			}
+		}
+	}
+	if stats.OneOffTasks > 0 {
+		stats.OneOffCompletionRate = float64(stats.CompletedOneOffTasks) / float64(stats.OneOffTasks)
 	}
 
 	return stats, nil
@@ -507,4 +547,41 @@ func (s *Service) completePlan(plan *domain.DayPlan, stamp time.Time) {
 	plan.CompletedAt = &stamp
 	plan.NextReminderAt = nil
 	plan.UpdatedAt = stamp
+}
+
+func (s *Service) rescheduleActivePlanReminder(ctx context.Context, userID int64, reminderIntervalMinutes int) error {
+	now := s.now().UTC()
+	plan, _, err := s.loadTodayPlan(ctx, userID, now)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if plan.Status != domain.PlanStatusActive || plan.NextReminderAt == nil {
+		return nil
+	}
+
+	nextReminder := now.Add(time.Duration(reminderIntervalMinutes) * time.Minute)
+	plan.NextReminderAt = &nextReminder
+	plan.UpdatedAt = now
+
+	return s.repo.SaveDayPlan(ctx, plan)
+}
+
+func splitBatchTitles(input string) []string {
+	parts := strings.FieldsFunc(input, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
+
+	titles := make([]string, 0, len(parts))
+	for _, part := range parts {
+		cleanTitle := strings.TrimSpace(part)
+		if cleanTitle == "" {
+			continue
+		}
+		titles = append(titles, cleanTitle)
+	}
+
+	return titles
 }

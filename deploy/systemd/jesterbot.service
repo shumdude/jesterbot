@@ -8,10 +8,7 @@ Type=simple
 WorkingDirectory=/opt/jesterbot
 Environment=JESTERBOT_BOT_TOKEN=replace-me
 Environment=JESTERBOT_DB_PATH=/opt/jesterbot/data/jesterbot.db
-Environment=JESTERBOT_TICK_INTERVAL=1m
 Environment=JESTERBOT_POLL_TIMEOUT=10s
-Environment=JESTERBOT_WORKERS=4
-Environment=JESTERBOT_DEFAULT_REMINDER_MINUTES=30
 ExecStart=/opt/jesterbot/jesterbot
 Restart=always
 RestartSec=5
