@@ -16,6 +16,7 @@ import (
 func (r *Router) handleOneOffTasksCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
 	r.logMessageEvent("handling one-off tasks command", update.Message)
 	chatID := update.Message.Chat.ID
+	r.cleanupUserMessage(ctx, update.Message)
 	user, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
 		r.handleRegistrationRequired(ctx, chatID)
@@ -39,9 +40,9 @@ func (r *Router) handleOneOffCallback(ctx context.Context, _ *bot.Bot, update *m
 	switch {
 	case data == "oneoff:add":
 		r.sessions.Update(chatID, func(s *Session) {
-			*s = Session{State: stateAddOneOffTitle}
+			s.resetForState(stateAddOneOffTitle)
 		})
-		r.sendMessage(ctx, chatID, tr("oneoff_prompt_title"), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_title"), nil)
 	case strings.HasPrefix(data, "oneoff:back:"):
 		page, err := parsePageCallback(data)
 		if err != nil {
@@ -66,7 +67,7 @@ func (r *Router) handleOneOffCallback(ctx context.Context, _ *bot.Bot, update *m
 			return
 		}
 		if err := r.service.DeleteOneOffTask(ctx, user.ID, taskID); err != nil {
-			r.sendMessage(ctx, chatID, tr("oneoff_error_delete", err.Error()), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_delete", err.Error()), nil)
 			return
 		}
 		r.showOneOffTasksPageAsEdit(ctx, chatID, messageID, user.ID, tr("oneoff_success_delete"), page)
@@ -77,10 +78,10 @@ func (r *Router) handleOneOffCallback(ctx context.Context, _ *bot.Bot, update *m
 		}
 		task, err := r.service.CompleteOneOffTask(ctx, user.ID, taskID, time.Now().UTC())
 		if err != nil {
-			r.sendMessage(ctx, chatID, tr("oneoff_error_complete", err.Error()), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_complete", err.Error()), nil)
 			return
 		}
-		r.editMessage(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboardPage(task, page))
+		r.showScreenFromCallback(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboardPage(task, page))
 	case strings.HasPrefix(data, "oneoff:item:"):
 		taskID, itemID, page, err := parseOneOffItemIDs(data)
 		if err != nil {
@@ -88,23 +89,23 @@ func (r *Router) handleOneOffCallback(ctx context.Context, _ *bot.Bot, update *m
 		}
 		task, err := r.service.ToggleOneOffTaskItem(ctx, user.ID, taskID, itemID, time.Now().UTC())
 		if err != nil {
-			r.sendMessage(ctx, chatID, tr("oneoff_error_toggle_item", err.Error()), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_toggle_item", err.Error()), nil)
 			return
 		}
-		r.editMessage(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboardPage(task, page))
+		r.showScreenFromCallback(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboardPage(task, page))
 	case strings.HasPrefix(data, "oneoff:create:priority:"):
 		priorityValue := strings.TrimPrefix(data, "oneoff:create:priority:")
 		priority := domain.OneOffTaskPriority(priorityValue)
 		draft := r.sessions.Get(chatID)
 		if draft.State != stateAddOneOffTitle || strings.TrimSpace(draft.OneOffTaskTitle) == "" {
-			r.sendMessage(ctx, chatID, tr("oneoff_error_title_required"), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_title_required"), nil)
 			return
 		}
 		r.sessions.Update(chatID, func(s *Session) {
 			s.State = stateAddOneOffItems
 			s.OneOffTaskPriority = priority
 		})
-		r.sendMessage(ctx, chatID, tr("oneoff_prompt_items"), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_items"), nil)
 	}
 }
 
@@ -115,10 +116,10 @@ func (r *Router) showOneOffTasks(ctx context.Context, chatID, userID int64, pref
 func (r *Router) showOneOffTasksPage(ctx context.Context, chatID, userID int64, prefix string, page int) {
 	tasks, err := r.service.ListOneOffTasks(ctx, userID)
 	if err != nil {
-		r.sendMessage(ctx, chatID, tr("oneoff_error_list"), r.mainMenu)
+		r.showScreen(ctx, chatID, tr("oneoff_error_list"), r.mainMenu)
 		return
 	}
-	r.sendMessage(ctx, chatID, prefix+"\n\n"+oneOffTasksTextPage(tasks, page, defaultInlinePageSize), buildOneOffTasksKeyboardPage(tasks, page, defaultInlinePageSize))
+	r.showScreen(ctx, chatID, prefix+"\n\n"+oneOffTasksTextPage(tasks, page, defaultInlinePageSize), buildOneOffTasksKeyboardPage(tasks, page, defaultInlinePageSize))
 }
 
 func (r *Router) showOneOffTasksAsEdit(ctx context.Context, chatID int64, messageID int, userID int64, prefix string) {
@@ -128,19 +129,19 @@ func (r *Router) showOneOffTasksAsEdit(ctx context.Context, chatID int64, messag
 func (r *Router) showOneOffTasksPageAsEdit(ctx context.Context, chatID int64, messageID int, userID int64, prefix string, page int) {
 	tasks, err := r.service.ListOneOffTasks(ctx, userID)
 	if err != nil {
-		r.sendMessage(ctx, chatID, tr("oneoff_error_list"), r.mainMenu)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_list"), r.mainMenu)
 		return
 	}
-	r.editMessage(ctx, chatID, messageID, prefix+"\n\n"+oneOffTasksTextPage(tasks, page, defaultInlinePageSize), buildOneOffTasksKeyboardPage(tasks, page, defaultInlinePageSize))
+	r.showScreenFromCallback(ctx, chatID, messageID, prefix+"\n\n"+oneOffTasksTextPage(tasks, page, defaultInlinePageSize), buildOneOffTasksKeyboardPage(tasks, page, defaultInlinePageSize))
 }
 
 func (r *Router) showOneOffTaskDetailAsEdit(ctx context.Context, chatID int64, messageID int, userID, taskID int64, page int) {
 	task, err := r.service.GetOneOffTask(ctx, userID, taskID)
 	if err != nil {
-		r.sendMessage(ctx, chatID, tr("oneoff_error_open"), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_open"), nil)
 		return
 	}
-	r.editMessage(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboardPage(task, page))
+	r.showScreenFromCallback(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboardPage(task, page))
 }
 
 func parseOneOffChecklistInput(input string) []string {

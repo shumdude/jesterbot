@@ -101,7 +101,7 @@ func (s *Scheduler) handleMorning(ctx context.Context, user domain.User, now tim
 	}
 
 	s.logger.Info("scheduler sending morning plan", "user_id", user.ID, "chat_id", user.ChatID, "day", plan.DayLocal, "items", len(plan.Items))
-	s.router.sendMessage(ctx, user.ChatID, selectionText(plan), buildPlanSelectionKeyboard(plan))
+	s.router.showScreen(ctx, user.ChatID, selectionText(plan), buildPlanSelectionKeyboard(plan))
 }
 
 func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now time.Time) {
@@ -123,7 +123,7 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 	}
 	if errors.Is(err, domain.ErrPlanClosed) {
 		s.logger.Info("scheduler detected completed plan", "user_id", user.ID, "chat_id", user.ChatID, "day", plan.DayLocal)
-		s.router.sendMessage(ctx, user.ChatID, completionMessage(updatedPlan), s.router.mainMenu)
+		s.router.showScreen(ctx, user.ChatID, completionMessage(updatedPlan), s.router.mainMenu)
 		return
 	}
 	if err != nil {
@@ -182,29 +182,10 @@ func (s *Scheduler) shouldProcessUser(userID int64, now time.Time, tickIntervalM
 	return true
 }
 
-func reminderText(item *domain.DayPlanItem, plan *domain.DayPlan) string {
-	remaining := make([]string, 0, len(plan.Items))
-	completed := 0
-	selected := 0
-	for _, candidate := range plan.Items {
-		if !candidate.Selected {
-			continue
-		}
-		selected++
-		if candidate.Completed {
-			completed++
-			continue
-		}
-		remaining = append(remaining, candidate.TitleSnapshot)
-	}
-
+func reminderText(item *domain.DayPlanItem, _ *domain.DayPlan) string {
 	lines := []string{
 		tr("reminder_text_title"),
 		tr("reminder_text_now", item.TitleSnapshot),
-		tr("reminder_text_progress", progressRatio(completed, selected)),
-	}
-	if len(remaining) > 0 {
-		lines = append(lines, decoratedLines(tr("reminder_text_remaining"), remaining)...)
 	}
 
 	return strings.Join(lines, "\n")

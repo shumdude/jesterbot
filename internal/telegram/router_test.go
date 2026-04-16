@@ -92,8 +92,25 @@ func TestProgressTextTranslatesStatusAndHidesSkipped(t *testing.T) {
 	if !strings.Contains(text, "1/2 (50%)") {
 		t.Fatalf("expected combined progress summary, got %q", text)
 	}
-	if !strings.Contains(text, "🔸 Осталось:\n▪️ Read") {
+	if !strings.Contains(text, "<b>Осталось:</b>\n▪️ Read") {
 		t.Fatalf("expected remaining items as multiline decorated list, got %q", text)
+	}
+	if !strings.Contains(text, "<b>Прогресс: 1/2 (50%)</b>") {
+		t.Fatalf("expected bold progress line, got %q", text)
+	}
+}
+
+func TestReminderTextShowsOnlyCurrentActivity(t *testing.T) {
+	text := reminderText(&domain.DayPlanItem{TitleSnapshot: "Почистить зубы"}, &domain.DayPlan{
+		Items: []domain.DayPlanItem{
+			{TitleSnapshot: "Почистить зубы", Selected: true},
+			{TitleSnapshot: "Зарядка", Selected: true},
+		},
+	})
+
+	expected := "🔔 Напоминание.\n👉 Сейчас лучше сделать: Почистить зубы"
+	if text != expected {
+		t.Fatalf("expected compact reminder text %q, got %q", expected, text)
 	}
 }
 
