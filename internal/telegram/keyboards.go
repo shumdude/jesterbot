@@ -12,57 +12,88 @@ import (
 
 func buildMainMenu(b *bot.Bot, r *Router) *replykbd.ReplyKeyboard {
 	return replykbd.New(replykbd.ResizableKeyboard()).
-		Button("📅 Сегодня", b, bot.MatchTypeExact, r.handleTodayCommand).
-		Button("🧩 Активности", b, bot.MatchTypeExact, r.handleActivitiesCommand).
+		Button(tr("main_menu_today"), b, bot.MatchTypeExact, r.handleTodayCommand).
+		Button(tr("main_menu_activities"), b, bot.MatchTypeExact, r.handleActivitiesCommand).
 		Row().
-		Button("📝 Разовые дела", b, bot.MatchTypeExact, r.handleOneOffTasksCommand).
-		Button("⚙️ Настройки", b, bot.MatchTypeExact, r.handleSettingsCommand).
+		Button(tr("main_menu_oneoff"), b, bot.MatchTypeExact, r.handleOneOffTasksCommand).
+		Button(tr("main_menu_settings"), b, bot.MatchTypeExact, r.handleSettingsCommand).
 		Row().
-		Button("📊 Статистика", b, bot.MatchTypeExact, r.handleStatsCommand)
+		Button(tr("main_menu_stats"), b, bot.MatchTypeExact, r.handleStatsCommand)
 }
 
 func buildActivitiesKeyboard(activities []domain.Activity) models.ReplyMarkup {
-	rows := make([][]models.InlineKeyboardButton, 0, len(activities)+2)
-	for _, activity := range activities {
+	return buildActivitiesKeyboardPage(activities, 0, defaultInlinePageSize)
+}
+
+func buildActivitiesKeyboardPage(activities []domain.Activity, page, pageSize int) models.ReplyMarkup {
+	view := paginate(activities, page, pageSize)
+	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+3)
+	for _, activity := range view.Items {
 		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: "✏️ " + activity.Title, CallbackData: fmt.Sprintf("activity:edit:%d", activity.ID)},
-			{Text: "🗑 Удалить", CallbackData: fmt.Sprintf("activity:delete:%d", activity.ID)},
+			{Text: tr("button_edit_prefix", activity.Title), CallbackData: fmt.Sprintf("activity:edit:%d", activity.ID)},
+			{Text: tr("button_delete"), CallbackData: fmt.Sprintf("activity:delete:%d:%d", activity.ID, view.Page)},
 		})
 	}
+	if paginationRow := buildPaginationRow("activity:page", view.Page, view.TotalPages); len(paginationRow) > 0 {
+		rows = append(rows, paginationRow)
+	}
 
-	rows = append(rows, []models.InlineKeyboardButton{{Text: "➕ Добавить активность", CallbackData: "activity:add"}})
-	rows = append(rows, []models.InlineKeyboardButton{{Text: "⬅️ Назад", CallbackData: "activity:back"}})
+	rows = append(rows, []models.InlineKeyboardButton{{Text: tr("button_add_activity"), CallbackData: "activity:add"}})
+	rows = append(rows, []models.InlineKeyboardButton{{Text: tr("button_back"), CallbackData: "activity:back"}})
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func buildPlanSelectionKeyboard(plan *domain.DayPlan) models.ReplyMarkup {
-	rows := make([][]models.InlineKeyboardButton, 0, len(plan.Items)+1)
-	for _, item := range plan.Items {
+	return buildPlanSelectionKeyboardPage(plan, 0, defaultInlinePageSize)
+}
+
+func buildPlanSelectionKeyboardPage(plan *domain.DayPlan, page, pageSize int) models.ReplyMarkup {
+	view := paginate(plan.Items, page, pageSize)
+	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+2)
+	for _, item := range view.Items {
 		icon := "✅"
 		if !item.Selected {
 			icon = "⬜"
 		}
 		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: fmt.Sprintf("%s %s", icon, item.TitleSnapshot), CallbackData: fmt.Sprintf("plan:toggle:%d", item.ActivityID)},
+			{Text: fmt.Sprintf("%s %s", icon, item.TitleSnapshot), CallbackData: fmt.Sprintf("plan:toggle:%d:%d", item.ActivityID, view.Page)},
 		})
+	}
+	if paginationRow := buildPaginationRow("plan:page", view.Page, view.TotalPages); len(paginationRow) > 0 {
+		rows = append(rows, paginationRow)
 	}
 
 	rows = append(rows, []models.InlineKeyboardButton{
-		{Text: "💪 Сделаю всё", CallbackData: "plan:all"},
-		{Text: "🚀 Начать день", CallbackData: "plan:finalize"},
+		{Text: tr("button_plan_all"), CallbackData: "plan:all"},
+		{Text: tr("button_plan_start"), CallbackData: "plan:finalize"},
 	})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func buildProgressKeyboard(plan *domain.DayPlan) models.ReplyMarkup {
-	rows := make([][]models.InlineKeyboardButton, 0)
+	return buildProgressKeyboardPage(plan, 0, defaultInlinePageSize)
+}
+
+func buildProgressKeyboardPage(plan *domain.DayPlan, page, pageSize int) models.ReplyMarkup {
+	selectedItems := make([]domain.DayPlanItem, 0, len(plan.Items))
 	for _, item := range plan.Items {
+		if item.Selected {
+			selectedItems = append(selectedItems, item)
+		}
+	}
+
+	view := paginate(selectedItems, page, pageSize)
+	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+1)
+	for _, item := range view.Items {
 		if item.Selected && !item.Completed {
 			rows = append(rows, []models.InlineKeyboardButton{
-				{Text: "✅ Готово: " + item.TitleSnapshot, CallbackData: fmt.Sprintf("done:%d", item.ActivityID)},
+				{Text: tr("button_done_prefix", item.TitleSnapshot), CallbackData: fmt.Sprintf("done:%d:%d", item.ActivityID, view.Page)},
 			})
 		}
+	}
+	if paginationRow := buildPaginationRow("plan:page", view.Page, view.TotalPages); len(paginationRow) > 0 {
+		rows = append(rows, paginationRow)
 	}
 	if len(rows) == 0 {
 		return nil
@@ -73,30 +104,34 @@ func buildProgressKeyboard(plan *domain.DayPlan) models.ReplyMarkup {
 func buildSettingsKeyboard() models.ReplyMarkup {
 	return &models.InlineKeyboardMarkup{
 		InlineKeyboard: [][]models.InlineKeyboardButton{
-			{{Text: "⏰ Время утра", CallbackData: "settings:morning"}},
-			{{Text: "🔁 Интервал напоминаний", CallbackData: "settings:interval"}},
-			{{Text: "🕒 Частота проверки", CallbackData: "settings:tick"}},
-			{{Text: "📝 Интервалы разовых дел", CallbackData: "settings:oneoff"}},
+			{{Text: tr("button_settings_morning"), CallbackData: "settings:morning"}},
+			{{Text: tr("button_settings_interval"), CallbackData: "settings:interval"}},
+			{{Text: tr("button_settings_tick"), CallbackData: "settings:tick"}},
+			{{Text: tr("button_settings_oneoff"), CallbackData: "settings:oneoff"}},
 		},
 	}
 }
 
 func buildOneOffTasksKeyboard(tasks []domain.OneOffTask) models.ReplyMarkup {
+	return buildOneOffTasksKeyboardPage(tasks, 0, defaultInlinePageSize)
+}
+
+func buildOneOffTasksKeyboardPage(tasks []domain.OneOffTask, page, pageSize int) models.ReplyMarkup {
 	activeTasks, _ := splitOneOffTasks(tasks)
-	rows := make([][]models.InlineKeyboardButton, 0, len(activeTasks)+1)
-	for _, task := range activeTasks {
-		statusIcon := "🟢"
-		if task.Status == domain.OneOffTaskStatusCompleted {
-			statusIcon = "✅"
-		}
+	view := paginate(activeTasks, page, pageSize)
+	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+2)
+	for _, task := range view.Items {
 		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: fmt.Sprintf("%s %s %s", statusIcon, oneOffPriorityIcon(task.Priority), task.Title), CallbackData: fmt.Sprintf("oneoff:open:%d", task.ID)},
-			{Text: "🗑", CallbackData: fmt.Sprintf("oneoff:delete:%d", task.ID)},
+			{Text: fmt.Sprintf("🟢 %s %s", oneOffPriorityIcon(task.Priority), task.Title), CallbackData: fmt.Sprintf("oneoff:open:%d:%d", task.ID, view.Page)},
+			{Text: tr("button_delete_icon"), CallbackData: fmt.Sprintf("oneoff:delete:%d:%d", task.ID, view.Page)},
 		})
+	}
+	if paginationRow := buildPaginationRow("oneoff:page", view.Page, view.TotalPages); len(paginationRow) > 0 {
+		rows = append(rows, paginationRow)
 	}
 
 	rows = append(rows, []models.InlineKeyboardButton{
-		{Text: "➕ Добавить разовое дело", CallbackData: "oneoff:add"},
+		{Text: tr("button_add_oneoff"), CallbackData: "oneoff:add"},
 	})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -106,15 +141,19 @@ func buildOneOffPriorityKeyboard() models.ReplyMarkup {
 	return &models.InlineKeyboardMarkup{
 		InlineKeyboard: [][]models.InlineKeyboardButton{
 			{
-				{Text: "🟩 Низкий", CallbackData: "oneoff:create:priority:low"},
-				{Text: "🟨 Средний", CallbackData: "oneoff:create:priority:medium"},
-				{Text: "🟥 Высокий", CallbackData: "oneoff:create:priority:high"},
+				{Text: tr("button_priority_low"), CallbackData: "oneoff:create:priority:low"},
+				{Text: tr("button_priority_medium"), CallbackData: "oneoff:create:priority:medium"},
+				{Text: tr("button_priority_high"), CallbackData: "oneoff:create:priority:high"},
 			},
 		},
 	}
 }
 
 func buildOneOffTaskDetailKeyboard(task *domain.OneOffTask) models.ReplyMarkup {
+	return buildOneOffTaskDetailKeyboardPage(task, 0)
+}
+
+func buildOneOffTaskDetailKeyboardPage(task *domain.OneOffTask, page int) models.ReplyMarkup {
 	rows := make([][]models.InlineKeyboardButton, 0, len(task.Items)+2)
 	if task.Status != domain.OneOffTaskStatusCompleted {
 		for _, item := range task.Items {
@@ -123,40 +162,44 @@ func buildOneOffTaskDetailKeyboard(task *domain.OneOffTask) models.ReplyMarkup {
 				icon = "☑️"
 			}
 			rows = append(rows, []models.InlineKeyboardButton{
-				{Text: fmt.Sprintf("%s %s", icon, item.Title), CallbackData: fmt.Sprintf("oneoff:item:%d:%d", task.ID, item.ID)},
+				{Text: fmt.Sprintf("%s %s", icon, item.Title), CallbackData: fmt.Sprintf("oneoff:item:%d:%d:%d", task.ID, item.ID, page)},
 			})
 		}
 	}
 
 	if task.Status != domain.OneOffTaskStatusCompleted {
 		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: "✅ Завершить дело", CallbackData: fmt.Sprintf("oneoff:complete:%d", task.ID)},
+			{Text: tr("button_complete_oneoff"), CallbackData: fmt.Sprintf("oneoff:complete:%d:%d", task.ID, page)},
 		})
 	}
 	rows = append(rows, []models.InlineKeyboardButton{
-		{Text: "⬅️ К списку", CallbackData: "oneoff:back"},
-		{Text: "🗑 Удалить", CallbackData: fmt.Sprintf("oneoff:delete:%d", task.ID)},
+		{Text: tr("button_back_to_list"), CallbackData: fmt.Sprintf("oneoff:back:%d", page)},
+		{Text: tr("button_delete"), CallbackData: fmt.Sprintf("oneoff:delete:%d:%d", task.ID, page)},
 	})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func buildOneOffReminderKeyboard(task *domain.OneOffTask) models.ReplyMarkup {
+	return buildOneOffReminderKeyboardPage(task, 0)
+}
+
+func buildOneOffReminderKeyboardPage(task *domain.OneOffTask, page int) models.ReplyMarkup {
 	rows := make([][]models.InlineKeyboardButton, 0, len(task.Items)+2)
 	for _, item := range task.Items {
 		if item.Completed {
 			continue
 		}
 		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: "⬜ " + item.Title, CallbackData: fmt.Sprintf("oneoff:item:%d:%d", task.ID, item.ID)},
+			{Text: "⬜ " + item.Title, CallbackData: fmt.Sprintf("oneoff:item:%d:%d:%d", task.ID, item.ID, page)},
 		})
 	}
 
 	rows = append(rows, []models.InlineKeyboardButton{
-		{Text: "✅ Завершить дело", CallbackData: fmt.Sprintf("oneoff:complete:%d", task.ID)},
+		{Text: tr("button_complete_oneoff"), CallbackData: fmt.Sprintf("oneoff:complete:%d:%d", task.ID, page)},
 	})
 	rows = append(rows, []models.InlineKeyboardButton{
-		{Text: "📋 Открыть дело", CallbackData: fmt.Sprintf("oneoff:open:%d", task.ID)},
+		{Text: tr("button_open_oneoff"), CallbackData: fmt.Sprintf("oneoff:open:%d:%d", task.ID, page)},
 	})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}

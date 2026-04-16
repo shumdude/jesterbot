@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -200,17 +199,17 @@ func reminderText(item *domain.DayPlanItem, plan *domain.DayPlan) string {
 	}
 
 	lines := []string{
-		"🔔 Напоминание.",
-		fmt.Sprintf("👉 Сейчас лучше сделать: %s", item.TitleSnapshot),
-		fmt.Sprintf("🔹 Прогресс: %s", progressRatio(completed, selected)),
+		tr("reminder_text_title"),
+		tr("reminder_text_now", item.TitleSnapshot),
+		tr("reminder_text_progress", progressRatio(completed, selected)),
 	}
 	if len(remaining) > 0 {
-		lines = append(lines, decoratedLines("🔸 Осталось на сегодня:", remaining)...)
+		lines = append(lines, decoratedLines(tr("reminder_text_remaining"), remaining)...)
 	}
 
 	return strings.Join(lines, "\n")
 }
 
 func completionMessage(plan *domain.DayPlan) string {
-	return "🎉 Все активности на сегодня закрыты. Отличная работа."
+	return tr("completion_message")
 }
