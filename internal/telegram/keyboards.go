@@ -70,14 +70,6 @@ func buildProgressKeyboard(plan *domain.DayPlan) models.ReplyMarkup {
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func buildReminderKeyboard(item *domain.DayPlanItem) models.ReplyMarkup {
-	return &models.InlineKeyboardMarkup{
-		InlineKeyboard: [][]models.InlineKeyboardButton{
-			{{Text: "✅ Готово", CallbackData: fmt.Sprintf("done:%d", item.ActivityID)}},
-		},
-	}
-}
-
 func buildSettingsKeyboard() models.ReplyMarkup {
 	return &models.InlineKeyboardMarkup{
 		InlineKeyboard: [][]models.InlineKeyboardButton{
@@ -90,8 +82,8 @@ func buildSettingsKeyboard() models.ReplyMarkup {
 }
 
 func buildOneOffTasksKeyboard(tasks []domain.OneOffTask) models.ReplyMarkup {
-	activeTasks, completedTasks := splitOneOffTasks(tasks)
-	rows := make([][]models.InlineKeyboardButton, 0, len(activeTasks)+2)
+	activeTasks, _ := splitOneOffTasks(tasks)
+	rows := make([][]models.InlineKeyboardButton, 0, len(activeTasks)+1)
 	for _, task := range activeTasks {
 		statusIcon := "🟢"
 		if task.Status == domain.OneOffTaskStatusCompleted {
@@ -105,27 +97,6 @@ func buildOneOffTasksKeyboard(tasks []domain.OneOffTask) models.ReplyMarkup {
 
 	rows = append(rows, []models.InlineKeyboardButton{
 		{Text: "➕ Добавить разовое дело", CallbackData: "oneoff:add"},
-	})
-	if len(completedTasks) > 0 {
-		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: "🕘 История дел", CallbackData: "oneoff:history"},
-		})
-	}
-
-	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
-}
-
-func buildOneOffHistoryKeyboard(tasks []domain.OneOffTask) models.ReplyMarkup {
-	_, completedTasks := splitOneOffTasks(tasks)
-	rows := make([][]models.InlineKeyboardButton, 0, len(completedTasks)+1)
-	for _, task := range completedTasks {
-		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: fmt.Sprintf("✅ %s %s", oneOffPriorityIcon(task.Priority), task.Title), CallbackData: fmt.Sprintf("oneoff:open:%d", task.ID)},
-			{Text: "🗑", CallbackData: fmt.Sprintf("oneoff:delete:%d", task.ID)},
-		})
-	}
-	rows = append(rows, []models.InlineKeyboardButton{
-		{Text: "⬅️ К активным делам", CallbackData: "oneoff:back"},
 	})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}

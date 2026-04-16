@@ -141,7 +141,7 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 		"activity_title", item.TitleSnapshot,
 		"cycle", updatedPlan.Cycle,
 	)
-	s.router.sendMessage(ctx, user.ChatID, reminderText(item, updatedPlan), buildReminderKeyboard(item))
+	s.router.sendMessage(ctx, user.ChatID, reminderText(item, updatedPlan), nil)
 }
 
 func (s *Scheduler) handleOneOffReminder(ctx context.Context, user domain.User, now time.Time) {
@@ -184,17 +184,28 @@ func (s *Scheduler) shouldProcessUser(userID int64, now time.Time, tickIntervalM
 }
 
 func reminderText(item *domain.DayPlanItem, plan *domain.DayPlan) string {
-	pending := 0
+	remaining := make([]string, 0, len(plan.Items))
+	completed := 0
+	selected := 0
 	for _, candidate := range plan.Items {
-		if candidate.Selected && !candidate.Completed {
-			pending++
+		if !candidate.Selected {
+			continue
 		}
+		selected++
+		if candidate.Completed {
+			completed++
+			continue
+		}
+		remaining = append(remaining, candidate.TitleSnapshot)
 	}
 
 	lines := []string{
 		"🔔 Напоминание.",
 		fmt.Sprintf("👉 Сейчас лучше сделать: %s", item.TitleSnapshot),
-		fmt.Sprintf("📌 Осталось активностей: %d", pending),
+		fmt.Sprintf("🔹 Прогресс: %s", progressRatio(completed, selected)),
+	}
+	if len(remaining) > 0 {
+		lines = append(lines, decoratedLines("🔸 Осталось на сегодня:", remaining)...)
 	}
 
 	return strings.Join(lines, "\n")

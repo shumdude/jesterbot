@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -608,7 +609,7 @@ func parseID(data string) (int64, error) {
 
 func welcomeText(user *domain.User) string {
 	return fmt.Sprintf(
-		"👋 Привет, %s.\nЯ помогу вести утренние активности, план дня и напоминания.\nИспользуй меню ниже или команду /today.",
+		"👋 Привет, %s.\nЯ Jester. Помогу вести утренние активности, план дня и напоминания.\nИспользуй меню ниже.",
 		user.Name,
 	)
 }
@@ -653,21 +654,28 @@ func todayPlanErrorText(err error) string {
 }
 
 func statsText(stats domain.DailyStats) string {
-	return fmt.Sprintf(
-		"📊 Статистика:\n- дней с планом: %d\n- завершённых дней: %d\n- выбранных активностей: %d\n- завершённых активностей: %d\n- пропущенных активностей: %d\n- процент выполнения: %.0f%%\n- разовых дел: %d\n- завершённых разовых дел: %d\n- активных разовых дел: %d\n- чекбоксов в разовых делах: %d\n- завершённых чекбоксов: %d\n- процент выполнения разовых дел: %.0f%%",
-		stats.DaysWithPlan,
-		stats.CompletedDays,
-		stats.SelectedActivities,
-		stats.CompletedActivities,
-		stats.SkippedActivities,
-		stats.CompletionRate*100,
-		stats.OneOffTasks,
-		stats.CompletedOneOffTasks,
-		stats.PendingOneOffTasks,
-		stats.OneOffChecklistItems,
-		stats.CompletedOneOffChecklistItems,
-		stats.OneOffCompletionRate*100,
-	)
+	lines := []string{
+		"📊 Jester: статистика",
+		fmt.Sprintf("🔹 Дни: %s", progressRatio(stats.CompletedDays, stats.DaysWithPlan)),
+		fmt.Sprintf("▪️ Дней с планом: %d", stats.DaysWithPlan),
+		fmt.Sprintf("🔺 Серия завершённых дней: %d", stats.CurrentCompletedStreak),
+		"",
+		fmt.Sprintf("♦️ Активности: %s", progressRatio(stats.CompletedActivities, stats.SelectedActivities)),
+		fmt.Sprintf("▪️ Выбрано: %d", stats.SelectedActivities),
+		fmt.Sprintf("🔹 Завершено: %d", stats.CompletedActivities),
+		fmt.Sprintf("🔸 Пропущено: %d", stats.SkippedActivities),
+		"",
+		fmt.Sprintf("🔹 Разовые дела: %s", progressRatio(stats.CompletedOneOffTasks, stats.OneOffTasks)),
+		fmt.Sprintf("▪️ Всего: %d", stats.OneOffTasks),
+		fmt.Sprintf("🔺 Активно: %d", stats.PendingOneOffTasks),
+		fmt.Sprintf("♦️ Завершено: %d", stats.CompletedOneOffTasks),
+		"",
+		fmt.Sprintf("🔸 Чеклист разовых дел: %s", progressRatio(stats.CompletedOneOffChecklistItems, stats.OneOffChecklistItems)),
+		fmt.Sprintf("▪️ Всего пунктов: %d", stats.OneOffChecklistItems),
+		fmt.Sprintf("🔹 Закрыто пунктов: %d", stats.CompletedOneOffChecklistItems),
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func planStatusLabel(status domain.PlanStatus) string {
@@ -699,14 +707,37 @@ func progressText(plan *domain.DayPlan) string {
 
 	lines := []string{
 		fmt.Sprintf("📍 Статус дня: %s", planStatusLabel(plan.Status)),
-		fmt.Sprintf("✅ Готово: %d", len(completed)),
-		fmt.Sprintf("⏳ Осталось: %d", len(remaining)),
+		fmt.Sprintf("🔹 Прогресс: %s", progressRatio(len(completed), len(completed)+len(remaining))),
 	}
 	if len(completed) > 0 {
-		lines = append(lines, "🎯 Сделано: "+strings.Join(completed, ", "))
+		lines = append(lines, decoratedLines("♦️ Сделано:", completed)...)
 	}
 	if len(remaining) > 0 {
-		lines = append(lines, "📌 Осталось: "+strings.Join(remaining, ", "))
+		lines = append(lines, decoratedLines("🔸 Осталось:", remaining)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func progressRatio(done, total int) string {
+	return fmt.Sprintf("%d/%d (%d%%)", done, total, roundedPercent(done, total))
+}
+
+func roundedPercent(done, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(done) * 100 / float64(total)))
+}
+
+func decoratedLines(title string, items []string) []string {
+	lines := []string{title}
+	for i, item := range items {
+		lines = append(lines, fmt.Sprintf("%s %s", decorativeBullet(i), item))
+	}
+	return lines
+}
+
+func decorativeBullet(index int) string {
+	bullets := []string{"▪️", "🔺", "♦️", "🔹", "🔸"}
+	return bullets[index%len(bullets)]
 }

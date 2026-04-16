@@ -44,8 +44,6 @@ func (r *Router) handleOneOffCallback(ctx context.Context, _ *bot.Bot, update *m
 		r.sendMessage(ctx, chatID, "📝 Пришли название разового дела.", nil)
 	case data == "oneoff:back":
 		r.showOneOffTasksAsEdit(ctx, chatID, messageID, user.ID, "📝 Разовые дела.")
-	case data == "oneoff:history":
-		r.showOneOffHistoryAsEdit(ctx, chatID, messageID, user.ID)
 	case strings.HasPrefix(data, "oneoff:open:"):
 		taskID, err := parseID(data)
 		if err != nil {
@@ -127,15 +125,6 @@ func (r *Router) showOneOffTaskDetailAsEdit(ctx context.Context, chatID int64, m
 	r.editMessage(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboard(task))
 }
 
-func (r *Router) showOneOffHistoryAsEdit(ctx context.Context, chatID int64, messageID int, userID int64) {
-	tasks, err := r.service.ListOneOffTasks(ctx, userID)
-	if err != nil {
-		r.sendMessage(ctx, chatID, "❌ Не получилось получить историю разовых дел.", r.mainMenu)
-		return
-	}
-	r.editMessage(ctx, chatID, messageID, oneOffHistoryText(tasks), buildOneOffHistoryKeyboard(tasks))
-}
-
 func parseOneOffChecklistInput(input string) []string {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" || trimmed == "-" || strings.EqualFold(trimmed, "нет") {
@@ -200,7 +189,7 @@ func oneOffTasksText(tasks []domain.OneOffTask) string {
 		return "🗒 Разовых дел пока нет. Добавь первое."
 	}
 
-	lines := make([]string, 0, len(activeTasks)+4)
+	lines := make([]string, 0, len(activeTasks)+2)
 	lines = append(lines, "📝 Активные разовые дела:")
 	if len(activeTasks) == 0 {
 		lines = append(lines, "- Сейчас активных разовых дел нет.")
@@ -213,31 +202,6 @@ func oneOffTasksText(tasks []domain.OneOffTask) string {
 			task.Title,
 			oneOffChecklistSummary(task),
 			oneOffStatusLabel(task.Status),
-		))
-	}
-	if len(completedTasks) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, fmt.Sprintf("🕘 История дел: %d.", len(completedTasks)))
-		lines = append(lines, "Открой историю кнопкой ниже.")
-	}
-	return strings.Join(lines, "\n")
-}
-
-func oneOffHistoryText(tasks []domain.OneOffTask) string {
-	_, completedTasks := splitOneOffTasks(tasks)
-	if len(completedTasks) == 0 {
-		return "🕘 История дел пока пуста."
-	}
-
-	lines := make([]string, 0, len(completedTasks)+1)
-	lines = append(lines, "🕘 История дел:")
-	for i, task := range completedTasks {
-		lines = append(lines, fmt.Sprintf(
-			"%d. %s %s %s",
-			i+1,
-			oneOffPriorityIcon(task.Priority),
-			task.Title,
-			oneOffChecklistSummary(task),
 		))
 	}
 	return strings.Join(lines, "\n")
@@ -278,11 +242,11 @@ func oneOffReminderText(task *domain.OneOffTask) string {
 	lines := []string{
 		prefix,
 		fmt.Sprintf("👉 %s", task.Title),
-		fmt.Sprintf("☑️ Прогресс: %s", oneOffChecklistSummary(*task)),
+		fmt.Sprintf("🔹 Прогресс: %s", oneOffChecklistSummary(*task)),
 	}
 	pendingItems := pendingOneOffItemTitles(*task)
 	if len(pendingItems) > 0 {
-		lines = append(lines, "📌 Осталось: "+strings.Join(pendingItems, ", "))
+		lines = append(lines, decoratedLines("🔸 Осталось:", pendingItems)...)
 	}
 
 	return strings.Join(lines, "\n")

@@ -38,8 +38,11 @@ func TestStatsTextUsesRussianLabels(t *testing.T) {
 	if strings.Contains(text, "completion rate") {
 		t.Fatalf("expected russian labels, got %q", text)
 	}
-	if !strings.Contains(text, "процент выполнения") {
-		t.Fatalf("expected russian completion label, got %q", text)
+	if !strings.Contains(text, "Jester: статистика") {
+		t.Fatalf("expected updated header, got %q", text)
+	}
+	if !strings.Contains(text, "0/0 (0%)") {
+		t.Fatalf("expected ratio-based summary, got %q", text)
 	}
 }
 
@@ -62,9 +65,15 @@ func TestProgressTextTranslatesStatusAndHidesSkipped(t *testing.T) {
 	if strings.Contains(text, "Пропуск") {
 		t.Fatalf("expected skipped block to be hidden, got %q", text)
 	}
+	if !strings.Contains(text, "1/2 (50%)") {
+		t.Fatalf("expected combined progress summary, got %q", text)
+	}
+	if !strings.Contains(text, "🔸 Осталось:\n▪️ Read") {
+		t.Fatalf("expected remaining items as multiline decorated list, got %q", text)
+	}
 }
 
-func TestOneOffTasksTextAndKeyboardHideCompletedTasksBehindHistory(t *testing.T) {
+func TestOneOffTasksTextAndKeyboardHideHistoryFromMenu(t *testing.T) {
 	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
 	tasks := []domain.OneOffTask{
 		{ID: 1, Title: "Pay bill", Priority: domain.OneOffTaskPriorityHigh, Status: domain.OneOffTaskStatusActive},
@@ -75,8 +84,8 @@ func TestOneOffTasksTextAndKeyboardHideCompletedTasksBehindHistory(t *testing.T)
 	if strings.Contains(text, "Archive notes") {
 		t.Fatalf("expected completed task to be removed from active list, got %q", text)
 	}
-	if !strings.Contains(text, "История дел") {
-		t.Fatalf("expected history summary, got %q", text)
+	if strings.Contains(text, "История дел") {
+		t.Fatalf("expected history to be absent from one-off menu, got %q", text)
 	}
 
 	markup := buildOneOffTasksKeyboard(tasks)
@@ -85,28 +94,15 @@ func TestOneOffTasksTextAndKeyboardHideCompletedTasksBehindHistory(t *testing.T)
 		t.Fatalf("expected inline keyboard, got %T", markup)
 	}
 
-	var hasHistoryButton bool
 	for _, row := range inline.InlineKeyboard {
 		for _, button := range row {
-			if button.CallbackData == "oneoff:history" {
-				hasHistoryButton = true
-			}
 			if strings.Contains(button.Text, "Archive notes") {
 				t.Fatalf("expected completed task to be absent from main keyboard, got %+v", button)
 			}
+			if button.CallbackData == "oneoff:history" {
+				t.Fatalf("expected history button to be removed, got %+v", button)
+			}
 		}
-	}
-	if !hasHistoryButton {
-		t.Fatal("expected history button for completed tasks")
-	}
-}
-
-func TestOneOffHistoryTextListsCompletedTasks(t *testing.T) {
-	text := oneOffHistoryText([]domain.OneOffTask{
-		{Title: "Archive notes", Priority: domain.OneOffTaskPriorityLow, Status: domain.OneOffTaskStatusCompleted},
-	})
-	if !strings.Contains(text, "Archive notes") {
-		t.Fatalf("expected completed task in history text, got %q", text)
 	}
 }
 
