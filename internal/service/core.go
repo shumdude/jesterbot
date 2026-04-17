@@ -126,11 +126,12 @@ func (s *Service) AddActivities(ctx context.Context, userID int64, input string)
 	created := make([]domain.Activity, 0, len(titles))
 	for i, title := range titles {
 		activity := domain.Activity{
-			UserID:    userID,
-			Title:     title,
-			SortOrder: len(existingActivities) + i + 1,
-			CreatedAt: now,
-			UpdatedAt: now,
+			UserID:      userID,
+			Title:       title,
+			SortOrder:   len(existingActivities) + i + 1,
+			TimesPerDay: 1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
 
 		if err := s.repo.CreateActivity(ctx, &activity); err != nil {
@@ -150,6 +151,13 @@ func (s *Service) UpdateActivity(ctx context.Context, userID, activityID int64, 
 	}
 
 	return s.repo.UpdateActivity(ctx, userID, activityID, cleanTitle)
+}
+
+func (s *Service) SetActivityTimesPerDay(ctx context.Context, userID, activityID int64, times int) error {
+	if times < 1 {
+		return fmt.Errorf("times per day must be at least 1")
+	}
+	return s.repo.UpdateActivityTimesPerDay(ctx, userID, activityID, times)
 }
 
 func (s *Service) DeleteActivity(ctx context.Context, userID, activityID int64) error {
@@ -196,11 +204,16 @@ func (s *Service) StartMorningPlan(ctx context.Context, userID int64, now time.T
 
 	plan.Items = make([]domain.DayPlanItem, 0, len(activities))
 	for _, activity := range activities {
+		timesPerDay := activity.TimesPerDay
+		if timesPerDay < 1 {
+			timesPerDay = 1
+		}
 		plan.Items = append(plan.Items, domain.DayPlanItem{
 			ActivityID:    activity.ID,
 			TitleSnapshot: activity.Title,
 			Selected:      true,
 			Completed:     false,
+			TimesPerDay:   timesPerDay,
 			CreatedAt:     stamp,
 			UpdatedAt:     stamp,
 		})
@@ -357,10 +370,17 @@ func (s *Service) MarkActivityDone(ctx context.Context, userID, activityID int64
 		if plan.Items[i].ActivityID != activityID {
 			continue
 		}
-		plan.Items[i].Completed = true
-		plan.Items[i].CompletedAt = &stamp
+		timesPerDay := plan.Items[i].TimesPerDay
+		if timesPerDay < 1 {
+			timesPerDay = 1
+		}
+		plan.Items[i].CompletedCount++
 		plan.Items[i].UpdatedAt = stamp
 		plan.UpdatedAt = stamp
+		if plan.Items[i].CompletedCount >= timesPerDay {
+			plan.Items[i].Completed = true
+			plan.Items[i].CompletedAt = &stamp
+		}
 
 		if pendingSelectedCount(plan) == 0 {
 			s.completePlan(plan, stamp)

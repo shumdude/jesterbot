@@ -304,6 +304,18 @@ func (m *memoryRepo) UpdateActivity(_ context.Context, userID, activityID int64,
 	return domain.ErrNotFound
 }
 
+func (m *memoryRepo) UpdateActivityTimesPerDay(_ context.Context, userID, activityID int64, timesPerDay int) error {
+	activities := m.activities[userID]
+	for i := range activities {
+		if activities[i].ID == activityID {
+			activities[i].TimesPerDay = timesPerDay
+			m.activities[userID] = activities
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
 func (m *memoryRepo) DeleteActivity(_ context.Context, userID, activityID int64) error {
 	activities := m.activities[userID]
 	for i := range activities {

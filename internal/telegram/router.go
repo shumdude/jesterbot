@@ -159,6 +159,24 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 		}
 		r.sessions.Clear(chatID)
 		r.showActivities(ctx, chatID, user.ID, tr("activity_success_update"))
+	case stateSetActivityTimes:
+		user, err := r.registeredUser(ctx, update.Message.From.ID)
+		if err != nil {
+			r.handleRegistrationRequired(ctx, chatID)
+			return
+		}
+		times, parseErr := strconv.Atoi(userText)
+		if parseErr != nil || times < 1 {
+			r.showScreen(ctx, chatID, tr("activity_error_invalid_times"), nil)
+			return
+		}
+		page := session.EditActivityPage
+		if err := r.service.SetActivityTimesPerDay(ctx, user.ID, session.EditActivityID, times); err != nil {
+			r.showScreen(ctx, chatID, tr("activity_error_times", err.Error()), nil)
+			return
+		}
+		r.sessions.Clear(chatID)
+		r.showActivitiesPage(ctx, chatID, user.ID, tr("activity_success_times"), page)
 	case stateUpdateMorning:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -355,6 +373,29 @@ func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update 
 			s.EditActivityID = activityID
 		})
 		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_edit"), nil)
+	case strings.HasPrefix(data, "activity:times:"):
+		activityID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		activities, err := r.service.ListActivities(ctx, user.ID)
+		if err != nil {
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), nil)
+			return
+		}
+		var activityTitle string
+		for _, a := range activities {
+			if a.ID == activityID {
+				activityTitle = a.Title
+				break
+			}
+		}
+		r.sessions.Update(chatID, func(s *Session) {
+			s.resetForState(stateSetActivityTimes)
+			s.EditActivityID = activityID
+			s.EditActivityPage = page
+		})
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_times", activityTitle), nil)
 	case strings.HasPrefix(data, "activity:delete:"):
 		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
@@ -873,9 +914,15 @@ func progressTextPage(plan *domain.DayPlan, page, pageSize int) string {
 
 	view := paginate(allSelected, page, pageSize)
 	for _, item := range view.Items {
+		timesPerDay := item.TimesPerDay
+		if timesPerDay < 1 {
+			timesPerDay = 1
+		}
 		switch {
 		case item.Completed:
 			completed = append(completed, html.EscapeString(item.TitleSnapshot))
+		case timesPerDay > 1 && item.CompletedCount > 0:
+			remaining = append(remaining, fmt.Sprintf("%s (%d/%d)", html.EscapeString(item.TitleSnapshot), item.CompletedCount, timesPerDay))
 		default:
 			remaining = append(remaining, html.EscapeString(item.TitleSnapshot))
 		}

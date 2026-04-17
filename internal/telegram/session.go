@@ -16,10 +16,11 @@ const (
 	stateRegisterOffset  SessionState = "register_offset"
 	stateRegisterMorning SessionState = "register_morning"
 	// Activity management states.
-	stateAddActivity    SessionState = "add_activity"
-	stateEditActivity   SessionState = "edit_activity"
-	stateAddOneOffTitle SessionState = "add_one_off_title"
-	stateAddOneOffItems SessionState = "add_one_off_items"
+	stateAddActivity      SessionState = "add_activity"
+	stateEditActivity     SessionState = "edit_activity"
+	stateSetActivityTimes SessionState = "set_activity_times"
+	stateAddOneOffTitle   SessionState = "add_one_off_title"
+	stateAddOneOffItems   SessionState = "add_one_off_items"
 	// Settings update states.
 	stateUpdateMorning        SessionState = "update_morning"
 	stateUpdateReminder       SessionState = "update_reminder"
@@ -38,6 +39,7 @@ type Session struct {
 	Name               string
 	UTCOffset          string
 	EditActivityID     int64
+	EditActivityPage   int
 	OneOffTaskTitle    string
 	OneOffTaskPriority domain.OneOffTaskPriority
 }

@@ -29,8 +29,13 @@ func buildActivitiesKeyboardPage(activities []domain.Activity, page, pageSize in
 	view := paginate(activities, page, pageSize)
 	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+3)
 	for _, activity := range view.Items {
+		timesPerDay := activity.TimesPerDay
+		if timesPerDay < 1 {
+			timesPerDay = 1
+		}
 		rows = append(rows, []models.InlineKeyboardButton{
 			{Text: tr("button_edit_prefix", activity.Title), CallbackData: fmt.Sprintf("activity:edit:%d", activity.ID)},
+			{Text: tr("button_activity_times", timesPerDay), CallbackData: fmt.Sprintf("activity:times:%d:%d", activity.ID, view.Page)},
 			{Text: tr("button_delete"), CallbackData: fmt.Sprintf("activity:delete:%d:%d", activity.ID, view.Page)},
 		})
 	}
@@ -87,8 +92,18 @@ func buildProgressKeyboardPage(plan *domain.DayPlan, page, pageSize int) models.
 	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+1)
 	for _, item := range view.Items {
 		if item.Selected && !item.Completed {
+			timesPerDay := item.TimesPerDay
+			if timesPerDay < 1 {
+				timesPerDay = 1
+			}
+			var btnText string
+			if timesPerDay > 1 {
+				btnText = tr("button_done_partial", item.CompletedCount, timesPerDay, item.TitleSnapshot)
+			} else {
+				btnText = tr("button_done_prefix", item.TitleSnapshot)
+			}
 			rows = append(rows, []models.InlineKeyboardButton{
-				{Text: tr("button_done_prefix", item.TitleSnapshot), CallbackData: fmt.Sprintf("done:%d:%d", item.ActivityID, view.Page)},
+				{Text: btnText, CallbackData: fmt.Sprintf("done:%d:%d", item.ActivityID, view.Page)},
 			})
 		}
 	}
