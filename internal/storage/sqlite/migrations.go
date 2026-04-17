@@ -89,6 +89,8 @@ var migrations = []string{
 	`ALTER TABLE activities ADD COLUMN times_per_day INTEGER NOT NULL DEFAULT 1;`,
 	`ALTER TABLE daily_plan_items ADD COLUMN times_per_day INTEGER NOT NULL DEFAULT 1;`,
 	`ALTER TABLE daily_plan_items ADD COLUMN completed_count INTEGER NOT NULL DEFAULT 0;`,
+	`ALTER TABLE activities ADD COLUMN reminder_window_start TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE activities ADD COLUMN reminder_window_end TEXT NOT NULL DEFAULT '';`,
 	`CREATE TABLE IF NOT EXISTS one_off_task_items (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		task_id INTEGER NOT NULL,

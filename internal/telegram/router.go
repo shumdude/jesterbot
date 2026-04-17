@@ -177,6 +177,28 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 		}
 		r.sessions.Clear(chatID)
 		r.showActivitiesPage(ctx, chatID, user.ID, tr("activity_success_times"), page)
+	case stateSetActivityWindow:
+		user, err := r.registeredUser(ctx, update.Message.From.ID)
+		if err != nil {
+			r.handleRegistrationRequired(ctx, chatID)
+			return
+		}
+		page := session.EditActivityPage
+		var windowStart, windowEnd string
+		if strings.TrimSpace(userText) != "-" {
+			var parseErr error
+			windowStart, windowEnd, parseErr = parseWindowInput(userText)
+			if parseErr != nil {
+				r.showScreen(ctx, chatID, tr("activity_error_invalid_window"), nil)
+				return
+			}
+		}
+		if err := r.service.SetActivityReminderWindow(ctx, user.ID, session.EditActivityID, windowStart, windowEnd); err != nil {
+			r.showScreen(ctx, chatID, tr("activity_error_window", err.Error()), nil)
+			return
+		}
+		r.sessions.Clear(chatID)
+		r.showActivitiesPage(ctx, chatID, user.ID, tr("activity_success_window"), page)
 	case stateUpdateMorning:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -396,6 +418,33 @@ func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update 
 			s.EditActivityPage = page
 		})
 		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_times", activityTitle), nil)
+	case strings.HasPrefix(data, "activity:window:"):
+		activityID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		activities, err := r.service.ListActivities(ctx, user.ID)
+		if err != nil {
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), nil)
+			return
+		}
+		var windowDesc string
+		for _, a := range activities {
+			if a.ID == activityID {
+				if a.ReminderWindowStart != "" {
+					windowDesc = a.ReminderWindowStart + "–" + a.ReminderWindowEnd
+				} else {
+					windowDesc = tr("activity_window_none")
+				}
+				break
+			}
+		}
+		r.sessions.Update(chatID, func(s *Session) {
+			s.resetForState(stateSetActivityWindow)
+			s.EditActivityID = activityID
+			s.EditActivityPage = page
+		})
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_window", windowDesc), nil)
 	case strings.HasPrefix(data, "activity:delete:"):
 		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
@@ -791,6 +840,29 @@ func telegramHTTPClientTimeout(pollTimeout time.Duration) time.Duration {
 
 func emptyInlineKeyboard() models.ReplyMarkup {
 	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
+}
+
+// parseWindowInput parses "HH:MM-HH:MM" into (start, end). Returns an error if
+// either part is not a valid 24-hour clock time or start equals end.
+func parseWindowInput(input string) (start, end string, err error) {
+	parts := strings.Split(strings.TrimSpace(input), "-")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("expected HH:MM-HH:MM")
+	}
+	parsed, parseErr := time.Parse("15:04", strings.TrimSpace(parts[0]))
+	if parseErr != nil {
+		return "", "", fmt.Errorf("invalid start time")
+	}
+	start = parsed.Format("15:04")
+	parsed, parseErr = time.Parse("15:04", strings.TrimSpace(parts[1]))
+	if parseErr != nil {
+		return "", "", fmt.Errorf("invalid end time")
+	}
+	end = parsed.Format("15:04")
+	if start == end {
+		return "", "", fmt.Errorf("start and end must differ")
+	}
+	return start, end, nil
 }
 
 func parseID(data string) (int64, error) {

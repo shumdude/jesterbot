@@ -37,8 +37,9 @@ func TestBuildActivitiesKeyboardPageCarriesCurrentPage(t *testing.T) {
 	}
 
 	firstRow := inline.InlineKeyboard[0]
-	if firstRow[2].CallbackData != "activity:delete:13:1" {
-		t.Fatalf("expected delete callback to keep page, got %+v", firstRow[2])
+	// Row layout: [edit, times, window, delete] — delete is now at index 3.
+	if firstRow[3].CallbackData != "activity:delete:13:1" {
+		t.Fatalf("expected delete callback to keep page, got %+v", firstRow[3])
 	}
 
 	pagerRow := inline.InlineKeyboard[1]

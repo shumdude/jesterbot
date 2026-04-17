@@ -19,4 +19,4 @@ Planned improvements for the repository.
 - [x] Write more code comments to make AI-agent-driven development easier.
 - [x] Write `README.md` files in project folders.
 - [x] Allow regular activities to be completed multiple times per day (e.g. brush teeth 2x).
-- [ ] Configure reminder time windows for regular activities (e.g. only remind about brushing teeth in the morning and evening, not throughout the day). Default: no window restriction (current behaviour).
+- [x] Configure reminder time windows for regular activities (e.g. only remind about brushing teeth in the morning and evening, not throughout the day). Default: no window restriction (current behaviour).

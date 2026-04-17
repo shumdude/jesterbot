@@ -18,6 +18,7 @@ type Repository interface {
 	CreateActivity(ctx context.Context, activity *domain.Activity) error
 	UpdateActivity(ctx context.Context, userID, activityID int64, title string) error
 	UpdateActivityTimesPerDay(ctx context.Context, userID, activityID int64, timesPerDay int) error
+	UpdateActivityReminderWindow(ctx context.Context, userID, activityID int64, windowStart, windowEnd string) error
 	DeleteActivity(ctx context.Context, userID, activityID int64) error
 	ListActivities(ctx context.Context, userID int64) ([]domain.Activity, error)
 

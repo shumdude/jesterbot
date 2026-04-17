@@ -57,6 +57,13 @@ activity_prompt_times: "🔢 Сколько раз в день делать «%s
 activity_success_times: "✅ Количество повторений обновлено."
 activity_error_times: "❌ Не получилось обновить количество повторений: %s"
 activity_error_invalid_times: "❗ Нужно целое положительное число, например `2`."
+activity_prompt_window: "⏰ Окно напоминаний. Текущее: %s.\nФормат: `HH:MM-HH:MM`, например `08:00-22:00`. Допустим переход через полночь: `22:00-06:00`. Для отмены ограничения отправь `-`."
+activity_success_window: "✅ Окно напоминаний обновлено."
+activity_error_window: "❌ Не получилось обновить окно напоминаний: %s"
+activity_error_invalid_window: "❗ Формат: `HH:MM-HH:MM` или `-` для отмены. Например: `09:00-21:00`."
+activity_window_none: "без ограничений"
+button_activity_window_none: "⏰ —"
+button_activity_window: "⏰ %s–%s"
 button_done_partial: "✅ Готово (%d/%d): %s"
 
 today_error_open: "❌ Не получилось открыть план дня: %s"

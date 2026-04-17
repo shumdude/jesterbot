@@ -160,6 +160,10 @@ func (s *Service) SetActivityTimesPerDay(ctx context.Context, userID, activityID
 	return s.repo.UpdateActivityTimesPerDay(ctx, userID, activityID, times)
 }
 
+func (s *Service) SetActivityReminderWindow(ctx context.Context, userID, activityID int64, windowStart, windowEnd string) error {
+	return s.repo.UpdateActivityReminderWindow(ctx, userID, activityID, windowStart, windowEnd)
+}
+
 func (s *Service) DeleteActivity(ctx context.Context, userID, activityID int64) error {
 	return s.repo.DeleteActivity(ctx, userID, activityID)
 }
@@ -329,6 +333,17 @@ func (s *Service) PickReminder(ctx context.Context, userID int64, now time.Time)
 		return nil, nil, domain.ErrPlanNotReady
 	}
 
+	// Load activities to check per-activity reminder windows.
+	activities, err := s.repo.ListActivities(ctx, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	actMap := make(map[int64]domain.Activity, len(activities))
+	for _, a := range activities {
+		actMap[a.ID] = a
+	}
+	clock := localClockHHMM(now, user.UTCOffsetMinutes)
+
 	// Within one cycle, each selected item can be reminded at most once.
 	// When every selected item has been touched in current cycle, increment cycle
 	// and start a new pass over remaining not-completed items.
@@ -341,7 +356,20 @@ func (s *Service) PickReminder(ctx context.Context, userID int64, now time.Time)
 		return nil, nil, domain.ErrPlanClosed
 	}
 
-	index := candidates[s.rng.Intn(len(candidates))]
+	// Filter candidates to those whose reminder window is currently open.
+	windowCandidates := make([]int, 0, len(candidates))
+	for _, idx := range candidates {
+		act, ok := actMap[plan.Items[idx].ActivityID]
+		if !ok || isInReminderWindow(act, clock) {
+			windowCandidates = append(windowCandidates, idx)
+		}
+	}
+	if len(windowCandidates) == 0 {
+		// All pending activities are outside their reminder windows; skip this tick.
+		return nil, nil, domain.ErrPlanNotReady
+	}
+
+	index := windowCandidates[s.rng.Intn(len(windowCandidates))]
 	plan.Items[index].ReminderCycle = plan.Cycle
 	plan.Items[index].UpdatedAt = now.UTC()
 	nextReminder := now.Add(time.Duration(user.ReminderIntervalMinutes) * time.Minute).UTC()
@@ -354,6 +382,25 @@ func (s *Service) PickReminder(ctx context.Context, userID int64, now time.Time)
 
 	item := plan.Items[index]
 	return &item, plan, nil
+}
+
+func localClockHHMM(now time.Time, utcOffsetMinutes int) string {
+	return now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute).Format("15:04")
+}
+
+// isInReminderWindow returns true if the activity has no window restriction or if
+// localClock (format "HH:MM") falls inside the configured window. Supports
+// midnight-crossing windows (e.g. ReminderWindowStart="22:00", End="06:00").
+func isInReminderWindow(act domain.Activity, localClock string) bool {
+	if act.ReminderWindowStart == "" || act.ReminderWindowEnd == "" {
+		return true
+	}
+	s, e := act.ReminderWindowStart, act.ReminderWindowEnd
+	if s <= e {
+		return localClock >= s && localClock < e
+	}
+	// Window crosses midnight.
+	return localClock >= s || localClock < e
 }
 
 func (s *Service) MarkActivityDone(ctx context.Context, userID, activityID int64, now time.Time) (*domain.DayPlan, error) {

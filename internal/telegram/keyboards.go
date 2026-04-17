@@ -36,6 +36,7 @@ func buildActivitiesKeyboardPage(activities []domain.Activity, page, pageSize in
 		rows = append(rows, []models.InlineKeyboardButton{
 			{Text: tr("button_edit_prefix", activity.Title), CallbackData: fmt.Sprintf("activity:edit:%d", activity.ID)},
 			{Text: tr("button_activity_times", timesPerDay), CallbackData: fmt.Sprintf("activity:times:%d:%d", activity.ID, view.Page)},
+			{Text: activityWindowButton(activity), CallbackData: fmt.Sprintf("activity:window:%d:%d", activity.ID, view.Page)},
 			{Text: tr("button_delete"), CallbackData: fmt.Sprintf("activity:delete:%d:%d", activity.ID, view.Page)},
 		})
 	}
@@ -218,4 +219,11 @@ func buildOneOffReminderKeyboardPage(task *domain.OneOffTask, page int) models.R
 	})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func activityWindowButton(a domain.Activity) string {
+	if a.ReminderWindowStart == "" || a.ReminderWindowEnd == "" {
+		return tr("button_activity_window_none")
+	}
+	return tr("button_activity_window", a.ReminderWindowStart, a.ReminderWindowEnd)
 }

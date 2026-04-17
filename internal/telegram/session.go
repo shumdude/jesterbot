@@ -26,6 +26,8 @@ const (
 	stateUpdateReminder       SessionState = "update_reminder"
 	stateUpdateOneOffReminder SessionState = "update_one_off_reminder"
 	stateUpdateTickInterval   SessionState = "update_tick_interval"
+	// Activity window state.
+	stateSetActivityWindow SessionState = "set_activity_window"
 
 	uiMessageModeNormal UIMessageMode = "normal"
 	uiMessageModeEdit   UIMessageMode = "edit"

@@ -120,12 +120,14 @@ func (r *Repository) UpdateUserSettings(ctx context.Context, userID int64, morni
 
 func (r *Repository) CreateActivity(ctx context.Context, activity *domain.Activity) error {
 	result, err := r.db.ExecContext(ctx, `
-		INSERT INTO activities (user_id, title, sort_order, times_per_day, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		INSERT INTO activities (user_id, title, sort_order, times_per_day, reminder_window_start, reminder_window_end, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		activity.UserID,
 		activity.Title,
 		activity.SortOrder,
 		activity.TimesPerDay,
+		activity.ReminderWindowStart,
+		activity.ReminderWindowEnd,
 		formatTime(activity.CreatedAt),
 		formatTime(activity.UpdatedAt),
 	)
@@ -208,9 +210,35 @@ func (r *Repository) DeleteActivity(ctx context.Context, userID, activityID int6
 	return nil
 }
 
+func (r *Repository) UpdateActivityReminderWindow(ctx context.Context, userID, activityID int64, windowStart, windowEnd string) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE activities
+		SET reminder_window_start = ?, reminder_window_end = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		windowStart,
+		windowEnd,
+		formatTime(time.Now().UTC()),
+		activityID,
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update activity reminder window: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("activity reminder window rows affected: %w", err)
+	}
+	if affected == 0 {
+		return domain.ErrNotFound
+	}
+
+	return nil
+}
+
 func (r *Repository) ListActivities(ctx context.Context, userID int64) ([]domain.Activity, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, title, sort_order, times_per_day, created_at, updated_at
+		SELECT id, user_id, title, sort_order, times_per_day, reminder_window_start, reminder_window_end, created_at, updated_at
 		FROM activities
 		WHERE user_id = ?
 		ORDER BY sort_order, id`,
@@ -484,7 +512,17 @@ func scanActivityRows(rows *sql.Rows) (*domain.Activity, error) {
 		activity             domain.Activity
 		createdAt, updatedAt string
 	)
-	if err := rows.Scan(&activity.ID, &activity.UserID, &activity.Title, &activity.SortOrder, &activity.TimesPerDay, &createdAt, &updatedAt); err != nil {
+	if err := rows.Scan(
+		&activity.ID,
+		&activity.UserID,
+		&activity.Title,
+		&activity.SortOrder,
+		&activity.TimesPerDay,
+		&activity.ReminderWindowStart,
+		&activity.ReminderWindowEnd,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
 		return nil, fmt.Errorf("scan activity: %w", err)
 	}
 
