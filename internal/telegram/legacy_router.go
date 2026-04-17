@@ -32,6 +32,7 @@ func (r *Controller) RegisterLegacyHandlers() {
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "done:", bot.MatchTypePrefix, r.handleDoneCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "oneoff:", bot.MatchTypePrefix, r.handleOneOffCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "settings:", bot.MatchTypePrefix, r.handleSettingsCallback)
+	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "menu:", bot.MatchTypePrefix, r.handleMenuCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, noopCallbackData, bot.MatchTypeExact, r.handleNoopCallback)
 }
 

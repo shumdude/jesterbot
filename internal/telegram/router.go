@@ -41,7 +41,7 @@ func (r *Controller) handleActivityCallback(ctx context.Context, _ *bot.Bot, upd
 	data := update.CallbackQuery.Data
 	switch {
 	case data == "activity:back":
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_back_to_menu"), emptyInlineKeyboard())
+		r.showMainMenuFromCallback(ctx, chatID, userID, messageID)
 	case strings.HasPrefix(data, "activity:list:"):
 		page, err := parsePageCallback(data)
 		if err != nil {
@@ -275,6 +275,22 @@ func (r *Controller) handleSettingsCallback(ctx context.Context, _ *bot.Bot, upd
 	}
 }
 
+func (r *Controller) handleMenuCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logCallbackEvent("handling menu callback", update.CallbackQuery)
+	r.answerCallback(ctx, update.CallbackQuery.ID)
+	chatID, userID, messageID := callbackIdentity(update)
+
+	if _, err := r.registeredUser(ctx, userID); err != nil {
+		r.handleRegistrationRequired(ctx, chatID, userID)
+		return
+	}
+
+	switch update.CallbackQuery.Data {
+	case "menu:back":
+		r.showMainMenuFromCallback(ctx, chatID, userID, messageID)
+	}
+}
+
 func (r *Controller) registeredUser(ctx context.Context, telegramUserID int64) (*domain.User, error) {
 	return r.service.FindUserByTelegramID(ctx, telegramUserID)
 }
@@ -442,6 +458,14 @@ func (r *Controller) showScreenFromCallback(ctx context.Context, chatID int64, c
 	r.sendMessage(ctx, chatID, text, markup)
 }
 
+func (r *Controller) showMainMenuFromCallback(ctx context.Context, chatID, userID int64, currentMessageID int) {
+	sess := r.session(userID, chatID)
+	_ = sess.ClearNamespace(constants.NSActivity)
+	_ = sess.Transition(ctx, constants.SceneMenu)
+	r.deleteMessage(ctx, chatID, currentMessageID)
+	r.showScreen(ctx, chatID, helpText(), r.menuMarkup(userID, chatID))
+}
+
 func usesHTMLParseMode(text string) bool {
 	return strings.Contains(text, "<b>") || strings.Contains(text, "</b>")
 }
@@ -503,10 +527,6 @@ func telegramHTTPClientTimeout(pollTimeout time.Duration) time.Duration {
 		return time.Minute
 	}
 	return httpTimeout
-}
-
-func emptyInlineKeyboard() models.ReplyMarkup {
-	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
 }
 
 // parseWindowInput parses "HH:MM-HH:MM" into (start, end). Returns an error if
