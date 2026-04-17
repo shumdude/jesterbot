@@ -29,15 +29,8 @@ func buildActivitiesKeyboardPage(activities []domain.Activity, page, pageSize in
 	view := paginate(activities, page, pageSize)
 	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+3)
 	for _, activity := range view.Items {
-		timesPerDay := activity.TimesPerDay
-		if timesPerDay < 1 {
-			timesPerDay = 1
-		}
 		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: tr("button_edit_prefix", activity.Title), CallbackData: fmt.Sprintf("activity:edit:%d", activity.ID)},
-			{Text: tr("button_activity_times", timesPerDay), CallbackData: fmt.Sprintf("activity:times:%d:%d", activity.ID, view.Page)},
-			{Text: activityWindowButton(activity), CallbackData: fmt.Sprintf("activity:window:%d:%d", activity.ID, view.Page)},
-			{Text: tr("button_delete"), CallbackData: fmt.Sprintf("activity:delete:%d:%d", activity.ID, view.Page)},
+			{Text: activity.Title, CallbackData: fmt.Sprintf("activity:open:%d:%d", activity.ID, view.Page)},
 		})
 	}
 	if paginationRow := buildPaginationRow("activity:page", view.Page, view.TotalPages); len(paginationRow) > 0 {
@@ -46,6 +39,22 @@ func buildActivitiesKeyboardPage(activities []domain.Activity, page, pageSize in
 
 	rows = append(rows, []models.InlineKeyboardButton{{Text: tr("button_add_activity"), CallbackData: "activity:add"}})
 	rows = append(rows, []models.InlineKeyboardButton{{Text: tr("button_back"), CallbackData: "activity:back"}})
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func buildActivityDetailKeyboard(activity domain.Activity, page int) models.ReplyMarkup {
+	timesPerDay := activity.TimesPerDay
+	if timesPerDay < 1 {
+		timesPerDay = 1
+	}
+
+	rows := [][]models.InlineKeyboardButton{
+		{{Text: tr("button_activity_times", timesPerDay), CallbackData: fmt.Sprintf("activity:times:%d:%d", activity.ID, page)}},
+		{{Text: activityWindowButton(activity), CallbackData: fmt.Sprintf("activity:window:%d:%d", activity.ID, page)}},
+		{{Text: tr("button_delete"), CallbackData: fmt.Sprintf("activity:delete:%d:%d", activity.ID, page)}},
+		{{Text: tr("button_back_to_list"), CallbackData: fmt.Sprintf("activity:list:%d", page)}},
+	}
+
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 

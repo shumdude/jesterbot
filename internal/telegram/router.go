@@ -157,8 +157,10 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			r.showScreen(ctx, chatID, tr("activity_error_update", err.Error()), nil)
 			return
 		}
+		activityID := session.EditActivityID
+		page := session.EditActivityPage
 		r.sessions.Clear(chatID)
-		r.showActivities(ctx, chatID, user.ID, tr("activity_success_update"))
+		r.showActivityDetail(ctx, chatID, user.ID, activityID, page, tr("activity_success_update"))
 	case stateSetActivityTimes:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -175,8 +177,9 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			r.showScreen(ctx, chatID, tr("activity_error_times", err.Error()), nil)
 			return
 		}
+		activityID := session.EditActivityID
 		r.sessions.Clear(chatID)
-		r.showActivitiesPage(ctx, chatID, user.ID, tr("activity_success_times"), page)
+		r.showActivityDetail(ctx, chatID, user.ID, activityID, page, tr("activity_success_times"))
 	case stateSetActivityWindow:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -197,8 +200,9 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			r.showScreen(ctx, chatID, tr("activity_error_window", err.Error()), nil)
 			return
 		}
+		activityID := session.EditActivityID
 		r.sessions.Clear(chatID)
-		r.showActivitiesPage(ctx, chatID, user.ID, tr("activity_success_window"), page)
+		r.showActivityDetail(ctx, chatID, user.ID, activityID, page, tr("activity_success_window"))
 	case stateUpdateMorning:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -374,12 +378,24 @@ func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update 
 	switch {
 	case data == "activity:back":
 		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_back_to_menu"), emptyInlineKeyboard())
+	case strings.HasPrefix(data, "activity:list:"):
+		page, err := parsePageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showActivitiesPageAsEdit(ctx, chatID, messageID, user.ID, tr("activity_title"), page)
 	case strings.HasPrefix(data, "activity:page:"):
 		page, err := parsePageCallback(data)
 		if err != nil {
 			return
 		}
 		r.showActivitiesPageAsEdit(ctx, chatID, messageID, user.ID, tr("activity_title"), page)
+	case strings.HasPrefix(data, "activity:open:"):
+		activityID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showActivityDetailAsEdit(ctx, chatID, messageID, user.ID, activityID, page, tr("activity_detail_title"))
 	case data == "activity:add":
 		r.sessions.Update(chatID, func(s *Session) {
 			s.resetForState(stateAddActivity)
@@ -393,6 +409,7 @@ func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update 
 		r.sessions.Update(chatID, func(s *Session) {
 			s.resetForState(stateEditActivity)
 			s.EditActivityID = activityID
+			s.EditActivityPage = 0
 		})
 		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_edit"), nil)
 	case strings.HasPrefix(data, "activity:times:"):
@@ -631,6 +648,38 @@ func (r *Router) showActivitiesPageAsEdit(ctx context.Context, chatID int64, mes
 		return
 	}
 	r.showScreenFromCallback(ctx, chatID, messageID, prefix+"\n\n"+activitiesTextPage(activities, page, defaultInlinePageSize), buildActivitiesKeyboardPage(activities, page, defaultInlinePageSize))
+}
+
+func (r *Router) showActivityDetail(ctx context.Context, chatID, userID, activityID int64, page int, prefix string) {
+	activities, err := r.service.ListActivities(ctx, userID)
+	if err != nil {
+		r.showScreen(ctx, chatID, tr("activity_error_list"), r.mainMenu)
+		return
+	}
+
+	activity, ok := findActivityByID(activities, activityID)
+	if !ok {
+		r.showActivitiesPage(ctx, chatID, userID, tr("activity_error_list"), page)
+		return
+	}
+
+	r.showScreen(ctx, chatID, activityDetailText(prefix, activity), buildActivityDetailKeyboard(activity, page))
+}
+
+func (r *Router) showActivityDetailAsEdit(ctx context.Context, chatID int64, messageID int, userID, activityID int64, page int, prefix string) {
+	activities, err := r.service.ListActivities(ctx, userID)
+	if err != nil {
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), r.mainMenu)
+		return
+	}
+
+	activity, ok := findActivityByID(activities, activityID)
+	if !ok {
+		r.showActivitiesPageAsEdit(ctx, chatID, messageID, userID, tr("activity_error_list"), page)
+		return
+	}
+
+	r.showScreenFromCallback(ctx, chatID, messageID, activityDetailText(prefix, activity), buildActivityDetailKeyboard(activity, page))
 }
 
 func (r *Router) showSettings(ctx context.Context, chatID, telegramUserID int64, prefix string) {
@@ -900,6 +949,37 @@ func activitiesTextPage(activities []domain.Activity, page, pageSize int) string
 		lines = append(lines, fmt.Sprintf("%d. %s", view.Start+i+1, activity.Title))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func activityDetailText(prefix string, activity domain.Activity) string {
+	timesPerDay := activity.TimesPerDay
+	if timesPerDay < 1 {
+		timesPerDay = 1
+	}
+
+	window := tr("activity_window_none")
+	if activity.ReminderWindowStart != "" && activity.ReminderWindowEnd != "" {
+		window = tr("activity_window_value", activity.ReminderWindowStart, activity.ReminderWindowEnd)
+	}
+
+	lines := []string{
+		prefix,
+		"",
+		tr("activity_detail_name", activity.Title),
+		tr("activity_detail_times", timesPerDay),
+		tr("activity_detail_window", window),
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func findActivityByID(activities []domain.Activity, activityID int64) (domain.Activity, bool) {
+	for _, activity := range activities {
+		if activity.ID == activityID {
+			return activity, true
+		}
+	}
+	return domain.Activity{}, false
 }
 
 func selectionText(plan *domain.DayPlan) string {

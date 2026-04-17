@@ -24,7 +24,7 @@ func TestBuildActivitiesKeyboardAddsBackButton(t *testing.T) {
 	}
 }
 
-func TestBuildActivitiesKeyboardPageCarriesCurrentPage(t *testing.T) {
+func TestBuildActivitiesKeyboardPageUsesSingleOpenButtonPerActivity(t *testing.T) {
 	activities := make([]domain.Activity, 0, 13)
 	for i := 1; i <= 13; i++ {
 		activities = append(activities, domain.Activity{ID: int64(i), Title: "Task"})
@@ -37,14 +37,43 @@ func TestBuildActivitiesKeyboardPageCarriesCurrentPage(t *testing.T) {
 	}
 
 	firstRow := inline.InlineKeyboard[0]
-	// Row layout: [edit, times, window, delete] — delete is now at index 3.
-	if firstRow[3].CallbackData != "activity:delete:13:1" {
-		t.Fatalf("expected delete callback to keep page, got %+v", firstRow[3])
+	if len(firstRow) != 1 {
+		t.Fatalf("expected single button row, got %+v", firstRow)
+	}
+	if firstRow[0].CallbackData != "activity:open:13:1" {
+		t.Fatalf("expected open callback to keep page, got %+v", firstRow[0])
 	}
 
 	pagerRow := inline.InlineKeyboard[1]
 	if pagerRow[len(pagerRow)-1].CallbackData != noopCallbackData {
 		t.Fatalf("expected page indicator row, got %+v", pagerRow)
+	}
+}
+
+func TestBuildActivityDetailKeyboardUsesPageAwareCallbacks(t *testing.T) {
+	markup := buildActivityDetailKeyboard(domain.Activity{
+		ID:                  42,
+		Title:               "Read",
+		TimesPerDay:         3,
+		ReminderWindowStart: "08:00",
+		ReminderWindowEnd:   "22:00",
+	}, 2)
+	inline, ok := markup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", markup)
+	}
+
+	if inline.InlineKeyboard[0][0].CallbackData != "activity:times:42:2" {
+		t.Fatalf("expected times callback, got %+v", inline.InlineKeyboard[0][0])
+	}
+	if inline.InlineKeyboard[1][0].CallbackData != "activity:window:42:2" {
+		t.Fatalf("expected window callback, got %+v", inline.InlineKeyboard[1][0])
+	}
+	if inline.InlineKeyboard[2][0].CallbackData != "activity:delete:42:2" {
+		t.Fatalf("expected delete callback, got %+v", inline.InlineKeyboard[2][0])
+	}
+	if inline.InlineKeyboard[3][0].CallbackData != "activity:list:2" {
+		t.Fatalf("expected list callback, got %+v", inline.InlineKeyboard[3][0])
 	}
 }
 
@@ -102,14 +131,14 @@ func TestProgressTextTranslatesStatusAndHidesSkipped(t *testing.T) {
 }
 
 func TestReminderTextShowsOnlyCurrentActivity(t *testing.T) {
-	text := reminderText(&domain.DayPlanItem{TitleSnapshot: "Почистить зубы"}, &domain.DayPlan{
+	text := reminderText(&domain.DayPlanItem{TitleSnapshot: "РџРѕС‡РёСЃС‚РёС‚СЊ Р·СѓР±С‹"}, &domain.DayPlan{
 		Items: []domain.DayPlanItem{
-			{TitleSnapshot: "Почистить зубы", Selected: true},
-			{TitleSnapshot: "Зарядка", Selected: true},
+			{TitleSnapshot: "РџРѕС‡РёСЃС‚РёС‚СЊ Р·СѓР±С‹", Selected: true},
+			{TitleSnapshot: "Р—Р°СЂСЏРґРєР°", Selected: true},
 		},
 	})
 
-	expected := "🔔 Напоминание.\n👉 Сейчас лучше сделать: Почистить зубы"
+	expected := "🔔 Напоминание.\n👉 Сейчас лучше сделать: РџРѕС‡РёСЃС‚РёС‚СЊ Р·СѓР±С‹"
 	if text != expected {
 		t.Fatalf("expected compact reminder text %q, got %q", expected, text)
 	}
@@ -163,7 +192,7 @@ func TestOneOffTasksTextPageShowsOnlyCurrentSlice(t *testing.T) {
 	if !strings.Contains(text, "Страница 2/2") {
 		t.Fatalf("expected page summary, got %q", text)
 	}
-	if strings.Contains(text, "\n1. 🟨 Task 1 ") {
+	if strings.Contains(text, "\n1. рџџЁ Task 1 ") {
 		t.Fatalf("expected first page task to be hidden, got %q", text)
 	}
 	if !strings.Contains(text, "13. 🟨 Task 13") {
