@@ -214,6 +214,74 @@ func TestUpdateSettingsReschedulesActivePlanReminder(t *testing.T) {
 	}
 }
 
+func TestPickReminderRespectsTimeWindow(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+
+	user := seedUser(repo) // UTCOffsetMinutes = 0, so local clock == UTC
+	activities := seedActivities(repo, user.ID, "Morning activity", "Unrestricted")
+
+	// Restrict first activity to morning window 08:00-10:00.
+	if err := repo.UpdateActivityReminderWindow(context.Background(), user.ID, activities[0].ID, "08:00", "10:00"); err != nil {
+		t.Fatalf("set window: %v", err)
+	}
+
+	// 05:00 UTC, outside the 08:00-10:00 window.
+	now := time.Date(2026, 4, 6, 5, 0, 0, 0, time.UTC)
+	if _, err := svc.StartMorningPlan(context.Background(), user.ID, now); err != nil {
+		t.Fatalf("start morning plan: %v", err)
+	}
+	if _, err := svc.FinalizePlan(context.Background(), user.ID, now); err != nil {
+		t.Fatalf("finalize plan: %v", err)
+	}
+
+	// First reminder tick (31 min after plan start, past the 30-min NextReminderAt).
+	item, _, err := svc.PickReminder(context.Background(), user.ID, now.Add(31*time.Minute))
+	if err != nil {
+		t.Fatalf("pick reminder at 05:31: %v", err)
+	}
+	// Only "Unrestricted" should be eligible at 05:31.
+	if item.ActivityID != activities[1].ID {
+		t.Fatalf("expected unrestricted activity, got activity_id=%d", item.ActivityID)
+	}
+
+	// Second tick: both "Morning activity" and "Unrestricted" have been reminded (or one was
+	// skipped due to window). Re-pick after interval; now at 08:31 — inside the window.
+	now2 := time.Date(2026, 4, 6, 8, 31, 0, 0, time.UTC)
+	item2, _, err := svc.PickReminder(context.Background(), user.ID, now2)
+	if err != nil {
+		t.Fatalf("pick reminder at 08:31: %v", err)
+	}
+	// "Morning activity" window is now open so both are eligible; just assert we get something.
+	if item2 == nil {
+		t.Fatal("expected a reminder item at 08:31")
+	}
+}
+
+func TestIsInReminderWindow(t *testing.T) {
+	tests := []struct {
+		start, end, clock string
+		want              bool
+	}{
+		{"", "", "10:00", true},       // no restriction
+		{"09:00", "21:00", "09:00", true},  // exactly at start
+		{"09:00", "21:00", "20:59", true},  // just before end
+		{"09:00", "21:00", "21:00", false}, // at end (exclusive)
+		{"09:00", "21:00", "08:59", false}, // before start
+		{"22:00", "06:00", "23:00", true},  // midnight-crossing, in evening part
+		{"22:00", "06:00", "05:59", true},  // midnight-crossing, in morning part
+		{"22:00", "06:00", "06:00", false}, // midnight-crossing, at end (exclusive)
+		{"22:00", "06:00", "10:00", false}, // midnight-crossing, outside
+	}
+	for _, tt := range tests {
+		act := domain.Activity{ReminderWindowStart: tt.start, ReminderWindowEnd: tt.end}
+		got := isInReminderWindow(act, tt.clock)
+		if got != tt.want {
+			t.Errorf("isInReminderWindow(%q, %q, %q) = %v, want %v", tt.start, tt.end, tt.clock, got, tt.want)
+		}
+	}
+}
+
 type memoryRepo struct {
 	nextUserID             int64
 	nextActivityID         int64
@@ -297,6 +365,31 @@ func (m *memoryRepo) UpdateActivity(_ context.Context, userID, activityID int64,
 	for i := range activities {
 		if activities[i].ID == activityID {
 			activities[i].Title = title
+			m.activities[userID] = activities
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (m *memoryRepo) UpdateActivityTimesPerDay(_ context.Context, userID, activityID int64, timesPerDay int) error {
+	activities := m.activities[userID]
+	for i := range activities {
+		if activities[i].ID == activityID {
+			activities[i].TimesPerDay = timesPerDay
+			m.activities[userID] = activities
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (m *memoryRepo) UpdateActivityReminderWindow(_ context.Context, userID, activityID int64, windowStart, windowEnd string) error {
+	activities := m.activities[userID]
+	for i := range activities {
+		if activities[i].ID == activityID {
+			activities[i].ReminderWindowStart = windowStart
+			activities[i].ReminderWindowEnd = windowEnd
 			m.activities[userID] = activities
 			return nil
 		}

@@ -16,13 +16,14 @@ import (
 func (r *Router) handleOneOffTasksCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
 	r.logMessageEvent("handling one-off tasks command", update.Message)
 	chatID := update.Message.Chat.ID
+	r.cleanupUserMessage(ctx, update.Message)
 	user, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
 		r.handleRegistrationRequired(ctx, chatID)
 		return
 	}
 
-	r.showOneOffTasks(ctx, chatID, user.ID, "📝 Разовые дела.")
+	r.showOneOffTasksPage(ctx, chatID, user.ID, tr("oneoff_title"), 0)
 }
 
 func (r *Router) handleOneOffCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
@@ -39,101 +40,108 @@ func (r *Router) handleOneOffCallback(ctx context.Context, _ *bot.Bot, update *m
 	switch {
 	case data == "oneoff:add":
 		r.sessions.Update(chatID, func(s *Session) {
-			*s = Session{State: stateAddOneOffTitle}
+			s.resetForState(stateAddOneOffTitle)
 		})
-		r.sendMessage(ctx, chatID, "📝 Пришли название разового дела.", nil)
-	case data == "oneoff:back":
-		r.showOneOffTasksAsEdit(ctx, chatID, messageID, user.ID, "📝 Разовые дела.")
-	case data == "oneoff:history":
-		r.showOneOffHistoryAsEdit(ctx, chatID, messageID, user.ID)
-	case strings.HasPrefix(data, "oneoff:open:"):
-		taskID, err := parseID(data)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_title"), nil)
+	case strings.HasPrefix(data, "oneoff:back:"):
+		page, err := parsePageCallback(data)
 		if err != nil {
 			return
 		}
-		r.showOneOffTaskDetailAsEdit(ctx, chatID, messageID, user.ID, taskID)
+		r.showOneOffTasksPageAsEdit(ctx, chatID, messageID, user.ID, tr("oneoff_title"), page)
+	case strings.HasPrefix(data, "oneoff:page:"):
+		page, err := parsePageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showOneOffTasksPageAsEdit(ctx, chatID, messageID, user.ID, tr("oneoff_title"), page)
+	case strings.HasPrefix(data, "oneoff:open:"):
+		taskID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showOneOffTaskDetailAsEdit(ctx, chatID, messageID, user.ID, taskID, page)
 	case strings.HasPrefix(data, "oneoff:delete:"):
-		taskID, err := parseID(data)
+		taskID, page, err := parseIDPageCallback(data)
 		if err != nil {
 			return
 		}
 		if err := r.service.DeleteOneOffTask(ctx, user.ID, taskID); err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось удалить разовое дело: "+err.Error(), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_delete", err.Error()), nil)
 			return
 		}
-		r.showOneOffTasksAsEdit(ctx, chatID, messageID, user.ID, "🗑 Разовое дело удалено.")
+		r.showOneOffTasksPageAsEdit(ctx, chatID, messageID, user.ID, tr("oneoff_success_delete"), page)
 	case strings.HasPrefix(data, "oneoff:complete:"):
-		taskID, err := parseID(data)
+		taskID, page, err := parseIDPageCallback(data)
 		if err != nil {
 			return
 		}
 		task, err := r.service.CompleteOneOffTask(ctx, user.ID, taskID, time.Now().UTC())
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось завершить разовое дело: "+err.Error(), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_complete", err.Error()), nil)
 			return
 		}
-		r.editMessage(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboard(task))
+		r.showScreenFromCallback(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboardPage(task, page))
 	case strings.HasPrefix(data, "oneoff:item:"):
-		taskID, itemID, err := parseOneOffItemIDs(data)
+		taskID, itemID, page, err := parseOneOffItemIDs(data)
 		if err != nil {
 			return
 		}
 		task, err := r.service.ToggleOneOffTaskItem(ctx, user.ID, taskID, itemID, time.Now().UTC())
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось обновить чекбокс: "+err.Error(), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_toggle_item", err.Error()), nil)
 			return
 		}
-		r.editMessage(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboard(task))
+		r.showScreenFromCallback(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboardPage(task, page))
 	case strings.HasPrefix(data, "oneoff:create:priority:"):
 		priorityValue := strings.TrimPrefix(data, "oneoff:create:priority:")
 		priority := domain.OneOffTaskPriority(priorityValue)
 		draft := r.sessions.Get(chatID)
 		if draft.State != stateAddOneOffTitle || strings.TrimSpace(draft.OneOffTaskTitle) == "" {
-			r.sendMessage(ctx, chatID, "❗ Сначала пришли название разового дела.", nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_title_required"), nil)
 			return
 		}
 		r.sessions.Update(chatID, func(s *Session) {
 			s.State = stateAddOneOffItems
 			s.OneOffTaskPriority = priority
 		})
-		r.sendMessage(ctx, chatID, "☑️ Пришли подпункты через запятую или новой строкой. Если подпунктов нет, отправь `-`.", nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_items"), nil)
 	}
 }
 
 func (r *Router) showOneOffTasks(ctx context.Context, chatID, userID int64, prefix string) {
+	r.showOneOffTasksPage(ctx, chatID, userID, prefix, 0)
+}
+
+func (r *Router) showOneOffTasksPage(ctx context.Context, chatID, userID int64, prefix string, page int) {
 	tasks, err := r.service.ListOneOffTasks(ctx, userID)
 	if err != nil {
-		r.sendMessage(ctx, chatID, "❌ Не получилось получить разовые дела.", r.mainMenu)
+		r.showScreen(ctx, chatID, tr("oneoff_error_list"), r.mainMenu)
 		return
 	}
-	r.sendMessage(ctx, chatID, prefix+"\n\n"+oneOffTasksText(tasks), buildOneOffTasksKeyboard(tasks))
+	r.showScreen(ctx, chatID, prefix+"\n\n"+oneOffTasksTextPage(tasks, page, defaultInlinePageSize), buildOneOffTasksKeyboardPage(tasks, page, defaultInlinePageSize))
 }
 
 func (r *Router) showOneOffTasksAsEdit(ctx context.Context, chatID int64, messageID int, userID int64, prefix string) {
-	tasks, err := r.service.ListOneOffTasks(ctx, userID)
-	if err != nil {
-		r.sendMessage(ctx, chatID, "❌ Не получилось получить разовые дела.", r.mainMenu)
-		return
-	}
-	r.editMessage(ctx, chatID, messageID, prefix+"\n\n"+oneOffTasksText(tasks), buildOneOffTasksKeyboard(tasks))
+	r.showOneOffTasksPageAsEdit(ctx, chatID, messageID, userID, prefix, 0)
 }
 
-func (r *Router) showOneOffTaskDetailAsEdit(ctx context.Context, chatID int64, messageID int, userID, taskID int64) {
+func (r *Router) showOneOffTasksPageAsEdit(ctx context.Context, chatID int64, messageID int, userID int64, prefix string, page int) {
+	tasks, err := r.service.ListOneOffTasks(ctx, userID)
+	if err != nil {
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_list"), r.mainMenu)
+		return
+	}
+	r.showScreenFromCallback(ctx, chatID, messageID, prefix+"\n\n"+oneOffTasksTextPage(tasks, page, defaultInlinePageSize), buildOneOffTasksKeyboardPage(tasks, page, defaultInlinePageSize))
+}
+
+func (r *Router) showOneOffTaskDetailAsEdit(ctx context.Context, chatID int64, messageID int, userID, taskID int64, page int) {
 	task, err := r.service.GetOneOffTask(ctx, userID, taskID)
 	if err != nil {
-		r.sendMessage(ctx, chatID, "❌ Не получилось открыть разовое дело.", nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_error_open"), nil)
 		return
 	}
-	r.editMessage(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboard(task))
-}
-
-func (r *Router) showOneOffHistoryAsEdit(ctx context.Context, chatID int64, messageID int, userID int64) {
-	tasks, err := r.service.ListOneOffTasks(ctx, userID)
-	if err != nil {
-		r.sendMessage(ctx, chatID, "❌ Не получилось получить историю разовых дел.", r.mainMenu)
-		return
-	}
-	r.editMessage(ctx, chatID, messageID, oneOffHistoryText(tasks), buildOneOffHistoryKeyboard(tasks))
+	r.showScreenFromCallback(ctx, chatID, messageID, oneOffTaskDetailText(task), buildOneOffTaskDetailKeyboardPage(task, page))
 }
 
 func parseOneOffChecklistInput(input string) []string {
@@ -176,68 +184,55 @@ func parseOneOffReminderSettingsInput(input string) (int, int, int, error) {
 	return values[0], values[1], values[2], nil
 }
 
-func parseOneOffItemIDs(data string) (int64, int64, error) {
+func parseOneOffItemIDs(data string) (int64, int64, int, error) {
 	parts := strings.Split(data, ":")
-	if len(parts) != 4 {
-		return 0, 0, fmt.Errorf("invalid one-off item callback: %s", data)
+	if len(parts) != 5 {
+		return 0, 0, 0, fmt.Errorf("invalid one-off item callback: %s", data)
 	}
 
 	taskID, err := strconv.ParseInt(parts[2], 10, 64)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	itemID, err := strconv.ParseInt(parts[3], 10, 64)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
+	}
+	page, err := strconv.Atoi(parts[4])
+	if err != nil {
+		return 0, 0, 0, err
 	}
 
-	return taskID, itemID, nil
+	return taskID, itemID, page, nil
 }
 
 func oneOffTasksText(tasks []domain.OneOffTask) string {
+	return oneOffTasksTextPage(tasks, 0, defaultInlinePageSize)
+}
+
+func oneOffTasksTextPage(tasks []domain.OneOffTask, page, pageSize int) string {
 	activeTasks, completedTasks := splitOneOffTasks(tasks)
 	if len(activeTasks) == 0 && len(completedTasks) == 0 {
-		return "🗒 Разовых дел пока нет. Добавь первое."
+		return tr("oneoff_list_empty")
 	}
 
-	lines := make([]string, 0, len(activeTasks)+4)
-	lines = append(lines, "📝 Активные разовые дела:")
-	if len(activeTasks) == 0 {
-		lines = append(lines, "- Сейчас активных разовых дел нет.")
+	view := paginate(activeTasks, page, pageSize)
+	lines := make([]string, 0, len(view.Items)+3)
+	lines = append(lines, tr("oneoff_list_title"))
+	if len(view.Items) == 0 {
+		lines = append(lines, tr("oneoff_list_empty_active"))
 	}
-	for i, task := range activeTasks {
+	if view.TotalPages > 1 {
+		lines = append(lines, pageSummary(view.Page, view.TotalPages, view.Start, view.End, view.TotalItems))
+	}
+	for i, task := range view.Items {
 		lines = append(lines, fmt.Sprintf(
 			"%d. %s %s %s (%s)",
-			i+1,
+			view.Start+i+1,
 			oneOffPriorityIcon(task.Priority),
 			task.Title,
 			oneOffChecklistSummary(task),
 			oneOffStatusLabel(task.Status),
-		))
-	}
-	if len(completedTasks) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, fmt.Sprintf("🕘 История дел: %d.", len(completedTasks)))
-		lines = append(lines, "Открой историю кнопкой ниже.")
-	}
-	return strings.Join(lines, "\n")
-}
-
-func oneOffHistoryText(tasks []domain.OneOffTask) string {
-	_, completedTasks := splitOneOffTasks(tasks)
-	if len(completedTasks) == 0 {
-		return "🕘 История дел пока пуста."
-	}
-
-	lines := make([]string, 0, len(completedTasks)+1)
-	lines = append(lines, "🕘 История дел:")
-	for i, task := range completedTasks {
-		lines = append(lines, fmt.Sprintf(
-			"%d. %s %s %s",
-			i+1,
-			oneOffPriorityIcon(task.Priority),
-			task.Title,
-			oneOffChecklistSummary(task),
 		))
 	}
 	return strings.Join(lines, "\n")
@@ -245,15 +240,15 @@ func oneOffHistoryText(tasks []domain.OneOffTask) string {
 
 func oneOffTaskDetailText(task *domain.OneOffTask) string {
 	lines := []string{
-		fmt.Sprintf("%s Разовое дело: %s", oneOffPriorityIcon(task.Priority), task.Title),
-		fmt.Sprintf("📍 Статус: %s", oneOffStatusLabel(task.Status)),
-		fmt.Sprintf("☑️ Подпункты: %s", oneOffChecklistSummary(*task)),
+		tr("oneoff_detail_title", oneOffPriorityIcon(task.Priority), task.Title),
+		tr("oneoff_detail_status", oneOffStatusLabel(task.Status)),
+		tr("oneoff_detail_items", oneOffChecklistSummary(*task)),
 	}
 	if task.NextReminderAt != nil && task.Status == domain.OneOffTaskStatusActive {
-		lines = append(lines, fmt.Sprintf("⏰ Следующее напоминание: %s UTC", task.NextReminderAt.UTC().Format("2006-01-02 15:04")))
+		lines = append(lines, tr("oneoff_detail_next", task.NextReminderAt.UTC().Format("2006-01-02 15:04")))
 	}
 	if len(task.Items) == 0 {
-		lines = append(lines, "• Подпунктов нет.")
+		lines = append(lines, tr("oneoff_detail_no_items"))
 	} else {
 		for _, item := range task.Items {
 			icon := "⬜"
@@ -267,30 +262,30 @@ func oneOffTaskDetailText(task *domain.OneOffTask) string {
 }
 
 func oneOffReminderText(task *domain.OneOffTask) string {
-	prefix := "🟨 Напоминание о разовом деле."
+	prefix := tr("oneoff_reminder_default")
 	switch task.Priority {
 	case domain.OneOffTaskPriorityHigh:
-		prefix = "🟥 Срочное напоминание о разовом деле."
+		prefix = tr("oneoff_reminder_high")
 	case domain.OneOffTaskPriorityLow:
-		prefix = "🟩 Спокойное напоминание о разовом деле."
+		prefix = tr("oneoff_reminder_low")
 	}
 
 	lines := []string{
 		prefix,
-		fmt.Sprintf("👉 %s", task.Title),
-		fmt.Sprintf("☑️ Прогресс: %s", oneOffChecklistSummary(*task)),
+		tr("oneoff_reminder_title", task.Title),
+		tr("oneoff_reminder_progress", oneOffChecklistSummary(*task)),
 	}
 	pendingItems := pendingOneOffItemTitles(*task)
 	if len(pendingItems) > 0 {
-		lines = append(lines, "📌 Осталось: "+strings.Join(pendingItems, ", "))
+		lines = append(lines, decoratedLines(tr("oneoff_reminder_remaining"), pendingItems)...)
 	}
 
 	return strings.Join(lines, "\n")
 }
 
 func oneOffReminderSettingsPrompt(settings *domain.OneOffReminderSettings) string {
-	return fmt.Sprintf(
-		"📝 Пришли интервалы напоминаний для разовых дел в минутах в порядке `низкий,средний,высокий`.\nТекущие значения: `%d,%d,%d`.",
+	return tr(
+		"settings_prompt_oneoff",
 		settings.LowPriorityMinutes,
 		settings.MediumPriorityMinutes,
 		settings.HighPriorityMinutes,
@@ -310,17 +305,17 @@ func oneOffPriorityIcon(priority domain.OneOffTaskPriority) string {
 
 func oneOffStatusLabel(status domain.OneOffTaskStatus) string {
 	if status == domain.OneOffTaskStatusCompleted {
-		return "завершено"
+		return tr("oneoff_status_completed")
 	}
-	return "активно"
+	return tr("oneoff_status_active")
 }
 
 func oneOffChecklistSummary(task domain.OneOffTask) string {
 	if len(task.Items) == 0 {
 		if task.Status == domain.OneOffTaskStatusCompleted {
-			return "выполнено"
+			return tr("oneoff_checklist_completed")
 		}
-		return "без подпунктов"
+		return tr("oneoff_checklist_none")
 	}
 
 	completed := 0

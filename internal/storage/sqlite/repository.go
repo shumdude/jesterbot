@@ -120,11 +120,14 @@ func (r *Repository) UpdateUserSettings(ctx context.Context, userID int64, morni
 
 func (r *Repository) CreateActivity(ctx context.Context, activity *domain.Activity) error {
 	result, err := r.db.ExecContext(ctx, `
-		INSERT INTO activities (user_id, title, sort_order, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)`,
+		INSERT INTO activities (user_id, title, sort_order, times_per_day, reminder_window_start, reminder_window_end, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		activity.UserID,
 		activity.Title,
 		activity.SortOrder,
+		activity.TimesPerDay,
+		activity.ReminderWindowStart,
+		activity.ReminderWindowEnd,
 		formatTime(activity.CreatedAt),
 		formatTime(activity.UpdatedAt),
 	)
@@ -135,6 +138,31 @@ func (r *Repository) CreateActivity(ctx context.Context, activity *domain.Activi
 	activity.ID, err = result.LastInsertId()
 	if err != nil {
 		return fmt.Errorf("activity last insert id: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) UpdateActivityTimesPerDay(ctx context.Context, userID, activityID int64, timesPerDay int) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE activities
+		SET times_per_day = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		timesPerDay,
+		formatTime(time.Now().UTC()),
+		activityID,
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update activity times per day: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("activity times per day rows affected: %w", err)
+	}
+	if affected == 0 {
+		return domain.ErrNotFound
 	}
 
 	return nil
@@ -182,9 +210,35 @@ func (r *Repository) DeleteActivity(ctx context.Context, userID, activityID int6
 	return nil
 }
 
+func (r *Repository) UpdateActivityReminderWindow(ctx context.Context, userID, activityID int64, windowStart, windowEnd string) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE activities
+		SET reminder_window_start = ?, reminder_window_end = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		windowStart,
+		windowEnd,
+		formatTime(time.Now().UTC()),
+		activityID,
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update activity reminder window: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("activity reminder window rows affected: %w", err)
+	}
+	if affected == 0 {
+		return domain.ErrNotFound
+	}
+
+	return nil
+}
+
 func (r *Repository) ListActivities(ctx context.Context, userID int64) ([]domain.Activity, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, title, sort_order, created_at, updated_at
+		SELECT id, user_id, title, sort_order, times_per_day, reminder_window_start, reminder_window_end, created_at, updated_at
 		FROM activities
 		WHERE user_id = ?
 		ORDER BY sort_order, id`,
@@ -299,13 +353,15 @@ func (r *Repository) SaveDayPlan(ctx context.Context, plan *domain.DayPlan) erro
 		// This keeps SaveDayPlan idempotent for repeated calls with same snapshot.
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO daily_plan_items (
-				plan_id, activity_id, title_snapshot, selected, completed, reminder_cycle, completed_at, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				plan_id, activity_id, title_snapshot, selected, completed, reminder_cycle, times_per_day, completed_count, completed_at, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(plan_id, activity_id) DO UPDATE SET
 				title_snapshot = excluded.title_snapshot,
 				selected = excluded.selected,
 				completed = excluded.completed,
 				reminder_cycle = excluded.reminder_cycle,
+				times_per_day = excluded.times_per_day,
+				completed_count = excluded.completed_count,
 				completed_at = excluded.completed_at,
 				updated_at = excluded.updated_at`,
 			plan.ID,
@@ -314,6 +370,8 @@ func (r *Repository) SaveDayPlan(ctx context.Context, plan *domain.DayPlan) erro
 			boolToInt(item.Selected),
 			boolToInt(item.Completed),
 			item.ReminderCycle,
+			item.TimesPerDay,
+			item.CompletedCount,
 			formatNullableTime(item.CompletedAt),
 			formatTime(item.CreatedAt),
 			formatTime(item.UpdatedAt),
@@ -375,7 +433,7 @@ func (r *Repository) ListPlans(ctx context.Context, userID int64) ([]domain.DayP
 
 func (r *Repository) loadPlanItems(ctx context.Context, planID int64) ([]domain.DayPlanItem, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, plan_id, activity_id, title_snapshot, selected, completed, reminder_cycle, completed_at, created_at, updated_at
+		SELECT id, plan_id, activity_id, title_snapshot, selected, completed, reminder_cycle, times_per_day, completed_count, completed_at, created_at, updated_at
 		FROM daily_plan_items
 		WHERE plan_id = ?
 		ORDER BY id`,
@@ -454,7 +512,17 @@ func scanActivityRows(rows *sql.Rows) (*domain.Activity, error) {
 		activity             domain.Activity
 		createdAt, updatedAt string
 	)
-	if err := rows.Scan(&activity.ID, &activity.UserID, &activity.Title, &activity.SortOrder, &createdAt, &updatedAt); err != nil {
+	if err := rows.Scan(
+		&activity.ID,
+		&activity.UserID,
+		&activity.Title,
+		&activity.SortOrder,
+		&activity.TimesPerDay,
+		&activity.ReminderWindowStart,
+		&activity.ReminderWindowEnd,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
 		return nil, fmt.Errorf("scan activity: %w", err)
 	}
 
@@ -555,6 +623,8 @@ func scanPlanItemRows(rows *sql.Rows) (*domain.DayPlanItem, error) {
 		&selected,
 		&completed,
 		&item.ReminderCycle,
+		&item.TimesPerDay,
+		&item.CompletedCount,
 		&completedAt,
 		&createdAt,
 		&updatedAt,

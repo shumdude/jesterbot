@@ -15,12 +15,15 @@ type User struct {
 }
 
 type Activity struct {
-	ID        int64
-	UserID    int64
-	Title     string
-	SortOrder int
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID                 int64
+	UserID             int64
+	Title              string
+	SortOrder          int
+	TimesPerDay        int
+	ReminderWindowStart string // "HH:MM" local time; empty = no restriction
+	ReminderWindowEnd   string // "HH:MM" local time; empty = no restriction
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type OneOffTaskPriority string
@@ -95,16 +98,18 @@ type DayPlan struct {
 }
 
 type DayPlanItem struct {
-	ID            int64
-	PlanID        int64
-	ActivityID    int64
-	TitleSnapshot string
-	Selected      bool
-	Completed     bool
-	ReminderCycle int
-	CompletedAt   *time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID             int64
+	PlanID         int64
+	ActivityID     int64
+	TitleSnapshot  string
+	Selected       bool
+	Completed      bool
+	ReminderCycle  int
+	TimesPerDay    int
+	CompletedCount int
+	CompletedAt    *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type DailyStats struct {

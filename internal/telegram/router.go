@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -63,6 +65,7 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 	}
 
 	chatID := update.Message.Chat.ID
+	r.cleanupUserMessage(ctx, update.Message)
 	userText := strings.TrimSpace(update.Message.Text)
 	// Text input is interpreted through per-chat state machine stored in SessionStore.
 	session := r.sessions.Get(chatID)
@@ -76,17 +79,17 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			s.State = stateRegisterOffset
 			s.Name = userText
 		})
-		r.sendMessage(ctx, chatID, "🌍 Напиши смещение UTC в формате `+03:00`, `-05:00` или `UTC`.", nil)
+		r.showScreen(ctx, chatID, tr("register_prompt_offset"), nil)
 	case stateRegisterOffset:
 		if _, err := service.ParseUTCOffset(userText); err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не смог распознать UTC offset. Пример: `+03:00`.", nil)
+			r.showScreen(ctx, chatID, tr("register_error_offset"), nil)
 			return
 		}
 		r.sessions.Update(chatID, func(s *Session) {
 			s.State = stateRegisterMorning
 			s.UTCOffset = userText
 		})
-		r.sendMessage(ctx, chatID, "🌅 Во сколько начинать утро? Формат `HH:MM`, например `08:30`.", nil)
+		r.showScreen(ctx, chatID, tr("register_prompt_morning"), nil)
 	case stateRegisterMorning:
 		draft := r.sessions.Get(chatID)
 		user, err := r.service.RegisterUser(ctx, service.RegistrationInput{
@@ -97,12 +100,12 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			MorningTime:    userText,
 		})
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось завершить регистрацию: "+err.Error(), nil)
+			r.showScreen(ctx, chatID, tr("register_error_finish", err.Error()), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
 		r.logger.Info("user registered", "user_id", user.ID, "chat_id", chatID, "telegram_user_id", update.Message.From.ID, "utc_offset_minutes", user.UTCOffsetMinutes, "morning_time", user.MorningTime)
-		r.sendMessage(ctx, chatID, welcomeText(user), r.mainMenu)
+		r.showScreen(ctx, chatID, welcomeText(user), r.mainMenu)
 	case stateAddActivity:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -111,25 +114,25 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 		}
 		activities, err := r.service.AddActivities(ctx, user.ID, userText)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось добавить активность: "+err.Error(), nil)
+			r.showScreen(ctx, chatID, tr("activity_error_add", err.Error()), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		prefix := "✅ Активность добавлена."
+		prefix := tr("activity_success_add_one")
 		if len(activities) > 1 {
-			prefix = fmt.Sprintf("✅ Добавлено активностей: %d.", len(activities))
+			prefix = tr("activity_success_add_many", len(activities))
 		}
 		r.showActivities(ctx, chatID, user.ID, prefix)
 	case stateAddOneOffTitle:
 		if strings.TrimSpace(userText) == "" {
-			r.sendMessage(ctx, chatID, "❗ Название разового дела не должно быть пустым.", nil)
+			r.showScreen(ctx, chatID, tr("oneoff_error_empty_title"), nil)
 			return
 		}
 		r.sessions.Update(chatID, func(s *Session) {
 			s.State = stateAddOneOffTitle
 			s.OneOffTaskTitle = userText
 		})
-		r.sendMessage(ctx, chatID, "🚦 Выбери приоритет разового дела.", buildOneOffPriorityKeyboard())
+		r.showScreen(ctx, chatID, tr("oneoff_prompt_priority"), buildOneOffPriorityKeyboard())
 	case stateAddOneOffItems:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -139,11 +142,11 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 		draft := r.sessions.Get(chatID)
 		task, err := r.service.CreateOneOffTask(ctx, user.ID, draft.OneOffTaskTitle, draft.OneOffTaskPriority, parseOneOffChecklistInput(userText))
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось создать разовое дело: "+err.Error(), nil)
+			r.showScreen(ctx, chatID, tr("oneoff_error_create", err.Error()), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.showOneOffTasks(ctx, chatID, user.ID, "✅ Разовое дело добавлено: "+task.Title)
+		r.showOneOffTasks(ctx, chatID, user.ID, tr("oneoff_success_create", task.Title))
 	case stateEditActivity:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -151,11 +154,55 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			return
 		}
 		if err := r.service.UpdateActivity(ctx, user.ID, session.EditActivityID, userText); err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось обновить активность: "+err.Error(), nil)
+			r.showScreen(ctx, chatID, tr("activity_error_update", err.Error()), nil)
 			return
 		}
+		activityID := session.EditActivityID
+		page := session.EditActivityPage
 		r.sessions.Clear(chatID)
-		r.showActivities(ctx, chatID, user.ID, "✅ Название обновлено.")
+		r.showActivityDetail(ctx, chatID, user.ID, activityID, page, tr("activity_success_update"))
+	case stateSetActivityTimes:
+		user, err := r.registeredUser(ctx, update.Message.From.ID)
+		if err != nil {
+			r.handleRegistrationRequired(ctx, chatID)
+			return
+		}
+		times, parseErr := strconv.Atoi(userText)
+		if parseErr != nil || times < 1 {
+			r.showScreen(ctx, chatID, tr("activity_error_invalid_times"), nil)
+			return
+		}
+		page := session.EditActivityPage
+		if err := r.service.SetActivityTimesPerDay(ctx, user.ID, session.EditActivityID, times); err != nil {
+			r.showScreen(ctx, chatID, tr("activity_error_times", err.Error()), nil)
+			return
+		}
+		activityID := session.EditActivityID
+		r.sessions.Clear(chatID)
+		r.showActivityDetail(ctx, chatID, user.ID, activityID, page, tr("activity_success_times"))
+	case stateSetActivityWindow:
+		user, err := r.registeredUser(ctx, update.Message.From.ID)
+		if err != nil {
+			r.handleRegistrationRequired(ctx, chatID)
+			return
+		}
+		page := session.EditActivityPage
+		var windowStart, windowEnd string
+		if strings.TrimSpace(userText) != "-" {
+			var parseErr error
+			windowStart, windowEnd, parseErr = parseWindowInput(userText)
+			if parseErr != nil {
+				r.showScreen(ctx, chatID, tr("activity_error_invalid_window"), nil)
+				return
+			}
+		}
+		if err := r.service.SetActivityReminderWindow(ctx, user.ID, session.EditActivityID, windowStart, windowEnd); err != nil {
+			r.showScreen(ctx, chatID, tr("activity_error_window", err.Error()), nil)
+			return
+		}
+		activityID := session.EditActivityID
+		r.sessions.Clear(chatID)
+		r.showActivityDetail(ctx, chatID, user.ID, activityID, page, tr("activity_success_window"))
 	case stateUpdateMorning:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -163,11 +210,11 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 			return
 		}
 		if err := r.service.UpdateSettings(ctx, user.ID, userText, user.ReminderIntervalMinutes); err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось обновить время утра: "+err.Error(), nil)
+			r.showScreen(ctx, chatID, tr("settings_error_update_morning", err.Error()), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.sendMessage(ctx, chatID, "✅ Время утра обновлено.", r.mainMenu)
+		r.showSettings(ctx, chatID, update.Message.From.ID, tr("settings_success_morning"))
 	case stateUpdateReminder:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -176,15 +223,15 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 		}
 		minutes, err := strconv.Atoi(userText)
 		if err != nil || minutes <= 0 {
-			r.sendMessage(ctx, chatID, "❗ Нужны целые минуты, например `30`.", nil)
+			r.showScreen(ctx, chatID, tr("settings_error_invalid_minutes"), nil)
 			return
 		}
 		if err := r.service.UpdateSettings(ctx, user.ID, user.MorningTime, minutes); err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось обновить интервал: "+err.Error(), nil)
+			r.showScreen(ctx, chatID, tr("settings_error_update_interval", err.Error()), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.sendMessage(ctx, chatID, "✅ Интервал напоминаний обновлён.", r.mainMenu)
+		r.showSettings(ctx, chatID, update.Message.From.ID, tr("settings_success_interval"))
 	case stateUpdateOneOffReminder:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -193,15 +240,15 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 		}
 		low, medium, high, err := parseOneOffReminderSettingsInput(userText)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❗ Нужны три положительных значения в формате `60,30,10`.", nil)
+			r.showScreen(ctx, chatID, tr("settings_error_invalid_oneoff"), nil)
 			return
 		}
 		if err := r.service.UpdateOneOffReminderSettings(ctx, user.ID, low, medium, high); err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось обновить интервалы разовых дел: "+err.Error(), nil)
+			r.showScreen(ctx, chatID, tr("settings_error_update_oneoff", err.Error()), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.sendMessage(ctx, chatID, "✅ Интервалы напоминаний для разовых дел обновлены.", r.mainMenu)
+		r.showSettings(ctx, chatID, update.Message.From.ID, tr("settings_success_oneoff"))
 	case stateUpdateTickInterval:
 		user, err := r.registeredUser(ctx, update.Message.From.ID)
 		if err != nil {
@@ -210,44 +257,46 @@ func (r *Router) handleDefault(ctx context.Context, b *bot.Bot, update *models.U
 		}
 		minutes, err := strconv.Atoi(userText)
 		if err != nil || minutes <= 0 {
-			r.sendMessage(ctx, chatID, "❗ Нужны целые положительные минуты, например `1`.", nil)
+			r.showScreen(ctx, chatID, tr("settings_error_invalid_tick"), nil)
 			return
 		}
 		if err := r.service.UpdateUserTickInterval(ctx, user.ID, minutes); err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось обновить частоту проверки: "+err.Error(), nil)
+			r.showScreen(ctx, chatID, tr("settings_error_update_tick", err.Error()), nil)
 			return
 		}
 		r.sessions.Clear(chatID)
-		r.sendMessage(ctx, chatID, "✅ Частота проверки расписания обновлена.", r.mainMenu)
+		r.showSettings(ctx, chatID, update.Message.From.ID, tr("settings_success_tick"))
 	default:
-		r.sendMessage(ctx, chatID, helpText(), r.mainMenu)
+		r.showScreen(ctx, chatID, helpText(), r.mainMenu)
 	}
 }
 
 func (r *Router) handleStart(ctx context.Context, _ *bot.Bot, update *models.Update) {
 	r.logMessageEvent("handling start command", update.Message)
 	chatID := update.Message.Chat.ID
+	r.cleanupUserMessage(ctx, update.Message)
 	user, err := r.service.FindUserByTelegramID(ctx, update.Message.From.ID)
 	if err == nil {
 		r.sessions.Clear(chatID)
 		r.logger.Info("start command for registered user", "user_id", user.ID, "chat_id", chatID)
-		r.sendMessage(ctx, chatID, welcomeText(user), r.mainMenu)
+		r.showScreen(ctx, chatID, welcomeText(user), r.mainMenu)
 		return
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
-		r.sendMessage(ctx, chatID, "❌ Не получилось проверить регистрацию.", nil)
+		r.showScreen(ctx, chatID, tr("register_error_check"), nil)
 		return
 	}
 
 	r.sessions.Update(chatID, func(s *Session) {
-		*s = Session{State: stateRegisterName}
+		s.resetForState(stateRegisterName)
 	})
-	r.sendMessage(ctx, chatID, "👋 Давай зарегистрируемся. Как тебя зовут?", nil)
+	r.showScreen(ctx, chatID, tr("register_prompt_name"), nil)
 }
 
 func (r *Router) handleTodayCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
 	r.logMessageEvent("handling today command", update.Message)
 	chatID := update.Message.Chat.ID
+	r.cleanupUserMessage(ctx, update.Message)
 	user, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
 		r.handleRegistrationRequired(ctx, chatID)
@@ -260,43 +309,46 @@ func (r *Router) handleTodayCommand(ctx context.Context, _ *bot.Bot, update *mod
 		plan, err = r.service.StartMorningPlan(ctx, user.ID, now)
 	}
 	if err != nil {
-		r.sendMessage(ctx, chatID, todayPlanErrorText(err), r.mainMenu)
+		r.showScreen(ctx, chatID, todayPlanErrorText(err), r.mainMenu)
 		return
 	}
 
 	if plan.Status == domain.PlanStatusAwaitingSelection {
-		r.sendMessage(ctx, chatID, selectionText(plan), buildPlanSelectionKeyboard(plan))
+		r.showScreen(ctx, chatID, selectionTextPage(plan, 0, defaultInlinePageSize), buildPlanSelectionKeyboardPage(plan, 0, defaultInlinePageSize))
 		return
 	}
 
-	r.sendMessage(ctx, chatID, progressText(plan), buildProgressKeyboard(plan))
+	r.showScreen(ctx, chatID, progressTextPage(plan, 0, defaultInlinePageSize), buildProgressKeyboardPage(plan, 0, defaultInlinePageSize))
 }
 
 func (r *Router) handleActivitiesCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
 	r.logMessageEvent("handling activities command", update.Message)
 	chatID := update.Message.Chat.ID
+	r.cleanupUserMessage(ctx, update.Message)
 	user, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
 		r.handleRegistrationRequired(ctx, chatID)
 		return
 	}
-	r.showActivities(ctx, chatID, user.ID, "🧩 Твои активности.")
+	r.showActivitiesPage(ctx, chatID, user.ID, tr("activity_title"), 0)
 }
 
 func (r *Router) handleSettingsCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
 	r.logMessageEvent("handling settings command", update.Message)
 	chatID := update.Message.Chat.ID
+	r.cleanupUserMessage(ctx, update.Message)
 	_, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
 		r.handleRegistrationRequired(ctx, chatID)
 		return
 	}
-	r.sendMessage(ctx, chatID, "⚙️ Что обновить?", buildSettingsKeyboard())
+	r.showSettings(ctx, chatID, update.Message.From.ID, tr("settings_title"))
 }
 
 func (r *Router) handleStatsCommand(ctx context.Context, _ *bot.Bot, update *models.Update) {
 	r.logMessageEvent("handling stats command", update.Message)
 	chatID := update.Message.Chat.ID
+	r.cleanupUserMessage(ctx, update.Message)
 	user, err := r.registeredUser(ctx, update.Message.From.ID)
 	if err != nil {
 		r.handleRegistrationRequired(ctx, chatID)
@@ -305,11 +357,11 @@ func (r *Router) handleStatsCommand(ctx context.Context, _ *bot.Bot, update *mod
 
 	stats, err := r.service.BuildStats(ctx, user.ID)
 	if err != nil {
-		r.sendMessage(ctx, chatID, "❌ Не получилось собрать статистику.", r.mainMenu)
+		r.showScreen(ctx, chatID, tr("stats_error_build"), r.mainMenu)
 		return
 	}
 
-	r.sendMessage(ctx, chatID, statsText(stats), r.mainMenu)
+	r.showScreen(ctx, chatID, statsText(stats), r.mainMenu)
 }
 
 func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
@@ -325,31 +377,101 @@ func (r *Router) handleActivityCallback(ctx context.Context, _ *bot.Bot, update 
 	data := update.CallbackQuery.Data
 	switch {
 	case data == "activity:back":
-		r.editMessage(ctx, chatID, messageID, "⬅️ Возврат в главное меню.\nВыбери следующий раздел в меню ниже.", emptyInlineKeyboard())
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_back_to_menu"), emptyInlineKeyboard())
+	case strings.HasPrefix(data, "activity:list:"):
+		page, err := parsePageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showActivitiesPageAsEdit(ctx, chatID, messageID, user.ID, tr("activity_title"), page)
+	case strings.HasPrefix(data, "activity:page:"):
+		page, err := parsePageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showActivitiesPageAsEdit(ctx, chatID, messageID, user.ID, tr("activity_title"), page)
+	case strings.HasPrefix(data, "activity:open:"):
+		activityID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showActivityDetailAsEdit(ctx, chatID, messageID, user.ID, activityID, page, tr("activity_detail_title"))
 	case data == "activity:add":
 		r.sessions.Update(chatID, func(s *Session) {
-			*s = Session{State: stateAddActivity}
+			s.resetForState(stateAddActivity)
 		})
-		r.sendMessage(ctx, chatID, "✍️ Пришли одну активность или список через запятую. Пример: `Stretch, Read, Walk`.", nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_add"), nil)
 	case strings.HasPrefix(data, "activity:edit:"):
 		activityID, err := parseID(data)
 		if err != nil {
 			return
 		}
 		r.sessions.Update(chatID, func(s *Session) {
-			*s = Session{State: stateEditActivity, EditActivityID: activityID}
+			s.resetForState(stateEditActivity)
+			s.EditActivityID = activityID
+			s.EditActivityPage = 0
 		})
-		r.sendMessage(ctx, chatID, "✍️ Пришли новое название активности.", nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_edit"), nil)
+	case strings.HasPrefix(data, "activity:times:"):
+		activityID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		activities, err := r.service.ListActivities(ctx, user.ID)
+		if err != nil {
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), nil)
+			return
+		}
+		var activityTitle string
+		for _, a := range activities {
+			if a.ID == activityID {
+				activityTitle = a.Title
+				break
+			}
+		}
+		r.sessions.Update(chatID, func(s *Session) {
+			s.resetForState(stateSetActivityTimes)
+			s.EditActivityID = activityID
+			s.EditActivityPage = page
+		})
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_times", activityTitle), nil)
+	case strings.HasPrefix(data, "activity:window:"):
+		activityID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		activities, err := r.service.ListActivities(ctx, user.ID)
+		if err != nil {
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), nil)
+			return
+		}
+		var windowDesc string
+		for _, a := range activities {
+			if a.ID == activityID {
+				if a.ReminderWindowStart != "" {
+					windowDesc = a.ReminderWindowStart + "–" + a.ReminderWindowEnd
+				} else {
+					windowDesc = tr("activity_window_none")
+				}
+				break
+			}
+		}
+		r.sessions.Update(chatID, func(s *Session) {
+			s.resetForState(stateSetActivityWindow)
+			s.EditActivityID = activityID
+			s.EditActivityPage = page
+		})
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_window", windowDesc), nil)
 	case strings.HasPrefix(data, "activity:delete:"):
-		activityID, err := parseID(data)
+		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
 			return
 		}
 		if err := r.service.DeleteActivity(ctx, user.ID, activityID); err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось удалить активность: "+err.Error(), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_delete", err.Error()), nil)
 			return
 		}
-		r.editMessage(ctx, chatID, messageID, "🗑 Активность удалена.\n\n"+activitiesText(r.mustActivities(ctx, user.ID)), buildActivitiesKeyboard(r.mustActivities(ctx, user.ID)))
+		r.showActivitiesPageAsEdit(ctx, chatID, messageID, user.ID, tr("activity_success_delete"), page)
 	}
 }
 
@@ -366,34 +488,49 @@ func (r *Router) handlePlanCallback(ctx context.Context, _ *bot.Bot, update *mod
 	now := time.Now().UTC()
 	data := update.CallbackQuery.Data
 	switch {
+	case strings.HasPrefix(data, "plan:page:"):
+		page, err := parsePageCallback(data)
+		if err != nil {
+			return
+		}
+		plan, err := r.service.GetTodayPlan(ctx, user.ID, now)
+		if err != nil {
+			r.showScreenFromCallback(ctx, chatID, messageID, todayPlanErrorText(err), r.mainMenu)
+			return
+		}
+		if plan.Status == domain.PlanStatusAwaitingSelection {
+			r.showScreenFromCallback(ctx, chatID, messageID, selectionTextPage(plan, page, defaultInlinePageSize), buildPlanSelectionKeyboardPage(plan, page, defaultInlinePageSize))
+			return
+		}
+		r.showScreenFromCallback(ctx, chatID, messageID, progressTextPage(plan, page, defaultInlinePageSize), buildProgressKeyboardPage(plan, page, defaultInlinePageSize))
 	case strings.HasPrefix(data, "plan:toggle:"):
-		activityID, err := parseID(data)
+		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
 			return
 		}
 		plan, err := r.service.TogglePlanItem(ctx, user.ID, activityID, now)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось обновить выбор: "+err.Error(), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("today_error_toggle", err.Error()), nil)
 			return
 		}
 		r.logger.Info("plan item toggled", "user_id", user.ID, "chat_id", chatID, "activity_id", activityID, "selected_count", countSelectedItems(plan))
-		r.editMessage(ctx, chatID, messageID, selectionText(plan), buildPlanSelectionKeyboard(plan))
+		r.showScreenFromCallback(ctx, chatID, messageID, selectionTextPage(plan, page, defaultInlinePageSize), buildPlanSelectionKeyboardPage(plan, page, defaultInlinePageSize))
 	case data == "plan:finalize":
 		plan, err := r.service.FinalizePlan(ctx, user.ID, now)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось зафиксировать план: "+err.Error(), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("today_error_finalize", err.Error()), nil)
 			return
 		}
 		r.logger.Info("plan finalized", "user_id", user.ID, "chat_id", chatID, "selected_count", countSelectedItems(plan), "completed_count", countCompletedItems(plan))
-		r.editMessage(ctx, chatID, messageID, progressText(plan), buildProgressKeyboard(plan))
+		r.showScreenFromCallback(ctx, chatID, messageID, progressTextPage(plan, 0, defaultInlinePageSize), buildProgressKeyboardPage(plan, 0, defaultInlinePageSize))
 	case data == "plan:all":
 		plan, err := r.service.SelectAllAndFinalize(ctx, user.ID, now)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось выбрать все активности: "+err.Error(), nil)
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("today_error_all", err.Error()), nil)
 			return
 		}
 		r.logger.Info("plan finalized with all activities", "user_id", user.ID, "chat_id", chatID, "selected_count", countSelectedItems(plan))
-		r.editMessage(ctx, chatID, messageID, progressText(plan), buildProgressKeyboard(plan))
+		r.showScreenFromCallback(ctx, chatID, messageID, progressTextPage(plan, 0, defaultInlinePageSize), buildProgressKeyboardPage(plan, 0, defaultInlinePageSize))
 	}
 }
 
@@ -407,22 +544,22 @@ func (r *Router) handleDoneCallback(ctx context.Context, _ *bot.Bot, update *mod
 		return
 	}
 
-	activityID, err := parseID(update.CallbackQuery.Data)
+	activityID, page, err := parseIDPageCallback(update.CallbackQuery.Data)
 	if err != nil {
 		return
 	}
 
 	plan, err := r.service.MarkActivityDone(ctx, user.ID, activityID, time.Now().UTC())
 	if err != nil {
-		r.sendMessage(ctx, chatID, "❌ Не получилось отметить активность: "+err.Error(), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("today_error_done", err.Error()), nil)
 		return
 	}
 
 	r.logger.Info("activity marked done", "user_id", user.ID, "chat_id", chatID, "activity_id", activityID, "completed_count", countCompletedItems(plan))
-	r.editMessage(ctx, chatID, messageID, progressText(plan), buildProgressKeyboard(plan))
+	r.showScreenFromCallback(ctx, chatID, messageID, progressTextPage(plan, page, defaultInlinePageSize), buildProgressKeyboardPage(plan, page, defaultInlinePageSize))
 	if plan.Status == domain.PlanStatusCompleted {
 		r.logger.Info("day plan completed", "user_id", user.ID, "chat_id", chatID, "day", plan.DayLocal)
-		r.sendMessage(ctx, chatID, completionMessage(plan), r.mainMenu)
+		r.showScreenFromCallback(ctx, chatID, messageID, completionMessage(plan), r.mainMenu)
 	}
 }
 
@@ -434,14 +571,14 @@ func (r *Router) handleSettingsCallback(ctx context.Context, _ *bot.Bot, update 
 	switch update.CallbackQuery.Data {
 	case "settings:morning":
 		r.sessions.Update(chatID, func(s *Session) {
-			*s = Session{State: stateUpdateMorning}
+			s.resetForState(stateUpdateMorning)
 		})
-		r.sendMessage(ctx, chatID, "⏰ Пришли новое время утра в формате `HH:MM`.", nil)
+		r.showScreenFromCallback(ctx, chatID, update.CallbackQuery.Message.Message.ID, tr("settings_prompt_morning"), nil)
 	case "settings:interval":
 		r.sessions.Update(chatID, func(s *Session) {
-			*s = Session{State: stateUpdateReminder}
+			s.resetForState(stateUpdateReminder)
 		})
-		r.sendMessage(ctx, chatID, "🔁 Пришли новый интервал напоминаний в минутах, например `30`.", nil)
+		r.showScreenFromCallback(ctx, chatID, update.CallbackQuery.Message.Message.ID, tr("settings_prompt_interval"), nil)
 	case "settings:tick":
 		user, err := r.registeredUser(ctx, update.CallbackQuery.From.ID)
 		if err != nil {
@@ -450,13 +587,13 @@ func (r *Router) handleSettingsCallback(ctx context.Context, _ *bot.Bot, update 
 		}
 		minutes, err := r.service.GetUserTickInterval(ctx, user.ID)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось получить частоту проверки.", nil)
+			r.showScreenFromCallback(ctx, chatID, update.CallbackQuery.Message.Message.ID, tr("settings_error_tick_get"), nil)
 			return
 		}
 		r.sessions.Update(chatID, func(s *Session) {
-			*s = Session{State: stateUpdateTickInterval}
+			s.resetForState(stateUpdateTickInterval)
 		})
-		r.sendMessage(ctx, chatID, fmt.Sprintf("🕒 Пришли частоту проверки расписания в минутах. Текущее значение: `%d`.", minutes), nil)
+		r.showScreenFromCallback(ctx, chatID, update.CallbackQuery.Message.Message.ID, tr("settings_prompt_tick", minutes), nil)
 	case "settings:oneoff":
 		user, err := r.registeredUser(ctx, update.CallbackQuery.From.ID)
 		if err != nil {
@@ -465,25 +602,26 @@ func (r *Router) handleSettingsCallback(ctx context.Context, _ *bot.Bot, update 
 		}
 		settings, err := r.service.GetOneOffReminderSettings(ctx, user.ID)
 		if err != nil {
-			r.sendMessage(ctx, chatID, "❌ Не получилось получить интервалы разовых дел.", nil)
+			r.showScreenFromCallback(ctx, chatID, update.CallbackQuery.Message.Message.ID, tr("settings_error_oneoff_get"), nil)
 			return
 		}
 		r.sessions.Update(chatID, func(s *Session) {
-			*s = Session{State: stateUpdateOneOffReminder}
+			s.resetForState(stateUpdateOneOffReminder)
 		})
-		r.sendMessage(ctx, chatID, oneOffReminderSettingsPrompt(settings), nil)
+		r.showScreenFromCallback(ctx, chatID, update.CallbackQuery.Message.Message.ID, oneOffReminderSettingsPrompt(settings), nil)
 	}
 }
 
 func (r *Router) registerHandlers() {
 	r.bot.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, r.handleStart)
 	r.bot.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, r.handleStart)
-	r.bot.RegisterHandler(bot.HandlerTypeMessageText, "📝 Разовые дела", bot.MatchTypeExact, r.handleOneOffTasksCommand)
+	r.bot.RegisterHandler(bot.HandlerTypeMessageText, tr("main_menu_oneoff"), bot.MatchTypeExact, r.handleOneOffTasksCommand)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "activity:", bot.MatchTypePrefix, r.handleActivityCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "plan:", bot.MatchTypePrefix, r.handlePlanCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "done:", bot.MatchTypePrefix, r.handleDoneCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "oneoff:", bot.MatchTypePrefix, r.handleOneOffCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "settings:", bot.MatchTypePrefix, r.handleSettingsCallback)
+	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, noopCallbackData, bot.MatchTypeExact, r.handleNoopCallback)
 }
 
 func (r *Router) registeredUser(ctx context.Context, telegramUserID int64) (*domain.User, error) {
@@ -491,12 +629,78 @@ func (r *Router) registeredUser(ctx context.Context, telegramUserID int64) (*dom
 }
 
 func (r *Router) showActivities(ctx context.Context, chatID, userID int64, prefix string) {
+	r.showActivitiesPage(ctx, chatID, userID, prefix, 0)
+}
+
+func (r *Router) showActivitiesPage(ctx context.Context, chatID, userID int64, prefix string, page int) {
 	activities, err := r.service.ListActivities(ctx, userID)
 	if err != nil {
-		r.sendMessage(ctx, chatID, "❌ Не получилось получить список активностей.", r.mainMenu)
+		r.showScreen(ctx, chatID, tr("activity_error_list"), r.mainMenu)
 		return
 	}
-	r.sendMessage(ctx, chatID, prefix+"\n\n"+activitiesText(activities), buildActivitiesKeyboard(activities))
+	r.showScreen(ctx, chatID, prefix+"\n\n"+activitiesTextPage(activities, page, defaultInlinePageSize), buildActivitiesKeyboardPage(activities, page, defaultInlinePageSize))
+}
+
+func (r *Router) showActivitiesPageAsEdit(ctx context.Context, chatID int64, messageID int, userID int64, prefix string, page int) {
+	activities, err := r.service.ListActivities(ctx, userID)
+	if err != nil {
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), r.mainMenu)
+		return
+	}
+	r.showScreenFromCallback(ctx, chatID, messageID, prefix+"\n\n"+activitiesTextPage(activities, page, defaultInlinePageSize), buildActivitiesKeyboardPage(activities, page, defaultInlinePageSize))
+}
+
+func (r *Router) showActivityDetail(ctx context.Context, chatID, userID, activityID int64, page int, prefix string) {
+	activities, err := r.service.ListActivities(ctx, userID)
+	if err != nil {
+		r.showScreen(ctx, chatID, tr("activity_error_list"), r.mainMenu)
+		return
+	}
+
+	activity, ok := findActivityByID(activities, activityID)
+	if !ok {
+		r.showActivitiesPage(ctx, chatID, userID, tr("activity_error_list"), page)
+		return
+	}
+
+	r.showScreen(ctx, chatID, activityDetailText(prefix, activity), buildActivityDetailKeyboard(activity, page))
+}
+
+func (r *Router) showActivityDetailAsEdit(ctx context.Context, chatID int64, messageID int, userID, activityID int64, page int, prefix string) {
+	activities, err := r.service.ListActivities(ctx, userID)
+	if err != nil {
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), r.mainMenu)
+		return
+	}
+
+	activity, ok := findActivityByID(activities, activityID)
+	if !ok {
+		r.showActivitiesPageAsEdit(ctx, chatID, messageID, userID, tr("activity_error_list"), page)
+		return
+	}
+
+	r.showScreenFromCallback(ctx, chatID, messageID, activityDetailText(prefix, activity), buildActivityDetailKeyboard(activity, page))
+}
+
+func (r *Router) showSettings(ctx context.Context, chatID, telegramUserID int64, prefix string) {
+	user, err := r.registeredUser(ctx, telegramUserID)
+	if err != nil {
+		r.handleRegistrationRequired(ctx, chatID)
+		return
+	}
+
+	tickMinutes, err := r.service.GetUserTickInterval(ctx, user.ID)
+	if err != nil {
+		r.showScreen(ctx, chatID, tr("settings_error_tick_get"), nil)
+		return
+	}
+	oneOffSettings, err := r.service.GetOneOffReminderSettings(ctx, user.ID)
+	if err != nil {
+		r.showScreen(ctx, chatID, tr("settings_error_oneoff_get"), nil)
+		return
+	}
+
+	r.showScreen(ctx, chatID, prefix+"\n\n"+settingsText(user, tickMinutes, oneOffSettings), buildSettingsKeyboard())
 }
 
 func (r *Router) mustActivities(ctx context.Context, userID int64) []domain.Activity {
@@ -510,39 +714,128 @@ func (r *Router) mustActivities(ctx context.Context, userID int64) []domain.Acti
 
 func (r *Router) handleRegistrationRequired(ctx context.Context, chatID int64) {
 	r.sessions.Update(chatID, func(s *Session) {
-		*s = Session{State: stateRegisterName}
+		s.resetForState(stateRegisterName)
 	})
-	r.sendMessage(ctx, chatID, "📝 Сначала нужна регистрация. Как тебя зовут?", nil)
+	r.showScreen(ctx, chatID, tr("register_required"), nil)
 }
 
-func (r *Router) sendMessage(ctx context.Context, chatID int64, text string, markup models.ReplyMarkup) {
+func (r *Router) sendMessage(ctx context.Context, chatID int64, text string, markup models.ReplyMarkup) int {
 	params := &bot.SendMessageParams{ChatID: chatID, Text: text}
+	if usesHTMLParseMode(text) {
+		params.ParseMode = models.ParseModeHTML
+	}
 	if markup != nil {
 		params.ReplyMarkup = markup
 	}
-	if _, err := r.bot.SendMessage(ctx, params); err != nil {
+	message, err := r.bot.SendMessage(ctx, params)
+	if err != nil {
 		r.logger.Error("send message failed", "error", err, "chat_id", chatID)
+		return 0
 	}
+	if message == nil {
+		return 0
+	}
+	return message.ID
 }
 
-func (r *Router) editMessage(ctx context.Context, chatID int64, messageID int, text string, markup models.ReplyMarkup) {
+func (r *Router) editMessage(ctx context.Context, chatID int64, messageID int, text string, markup models.ReplyMarkup) bool {
 	params := &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: messageID,
 		Text:      text,
+	}
+	if usesHTMLParseMode(text) {
+		params.ParseMode = models.ParseModeHTML
 	}
 	if markup != nil {
 		params.ReplyMarkup = markup
 	}
 	if _, err := r.bot.EditMessageText(ctx, params); err != nil {
 		r.logger.Error("edit message failed", "error", err, "chat_id", chatID, "message_id", messageID)
+		return false
 	}
+	return true
+}
+
+func (r *Router) deleteMessage(ctx context.Context, chatID int64, messageID int) bool {
+	if messageID == 0 {
+		return false
+	}
+	if _, err := r.bot.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: messageID}); err != nil {
+		r.logger.Error("delete message failed", "error", err, "chat_id", chatID, "message_id", messageID)
+		return false
+	}
+	return true
+}
+
+func (r *Router) showScreen(ctx context.Context, chatID int64, text string, markup models.ReplyMarkup) {
+	r.renderScreen(ctx, chatID, 0, text, markup)
+}
+
+func (r *Router) showScreenFromCallback(ctx context.Context, chatID int64, currentMessageID int, text string, markup models.ReplyMarkup) {
+	r.renderScreen(ctx, chatID, currentMessageID, text, markup)
+}
+
+func (r *Router) renderScreen(ctx context.Context, chatID int64, currentMessageID int, text string, markup models.ReplyMarkup) {
+	session := r.sessions.Get(chatID)
+	targetMessageID := session.ActiveMessageID
+	if targetMessageID == 0 {
+		targetMessageID = currentMessageID
+	}
+
+	switch session.messageMode() {
+	case uiMessageModeEdit:
+		if targetMessageID != 0 && r.editMessage(ctx, chatID, targetMessageID, text, markup) {
+			r.setActiveMessage(chatID, targetMessageID)
+			return
+		}
+	case uiMessageModeDelete:
+		if targetMessageID != 0 {
+			r.deleteMessage(ctx, chatID, targetMessageID)
+			r.clearActiveMessage(chatID, targetMessageID)
+		}
+	}
+
+	newMessageID := r.sendMessage(ctx, chatID, text, markup)
+	r.setActiveMessage(chatID, newMessageID)
+}
+
+func (r *Router) cleanupUserMessage(ctx context.Context, message *models.Message) {
+	if message == nil || r.sessions.Get(message.Chat.ID).messageMode() == uiMessageModeNormal {
+		return
+	}
+	r.deleteMessage(ctx, message.Chat.ID, message.ID)
+}
+
+func (r *Router) setActiveMessage(chatID int64, messageID int) {
+	if messageID == 0 {
+		return
+	}
+	r.sessions.Update(chatID, func(s *Session) {
+		s.ActiveMessageID = messageID
+	})
+}
+
+func (r *Router) clearActiveMessage(chatID int64, messageID int) {
+	r.sessions.Update(chatID, func(s *Session) {
+		if messageID == 0 || s.ActiveMessageID == messageID {
+			s.ActiveMessageID = 0
+		}
+	})
+}
+
+func usesHTMLParseMode(text string) bool {
+	return strings.Contains(text, "<b>") || strings.Contains(text, "</b>")
 }
 
 func (r *Router) answerCallback(ctx context.Context, callbackID string) {
 	if _, err := r.bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: callbackID}); err != nil {
 		r.logger.Error("answer callback failed", "error", err)
 	}
+}
+
+func (r *Router) handleNoopCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.answerCallback(ctx, update.CallbackQuery.ID)
 }
 
 func callbackIdentity(update *models.Update) (chatID int64, userID int64, messageID int) {
@@ -598,6 +891,29 @@ func emptyInlineKeyboard() models.ReplyMarkup {
 	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
 }
 
+// parseWindowInput parses "HH:MM-HH:MM" into (start, end). Returns an error if
+// either part is not a valid 24-hour clock time or start equals end.
+func parseWindowInput(input string) (start, end string, err error) {
+	parts := strings.Split(strings.TrimSpace(input), "-")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("expected HH:MM-HH:MM")
+	}
+	parsed, parseErr := time.Parse("15:04", strings.TrimSpace(parts[0]))
+	if parseErr != nil {
+		return "", "", fmt.Errorf("invalid start time")
+	}
+	start = parsed.Format("15:04")
+	parsed, parseErr = time.Parse("15:04", strings.TrimSpace(parts[1]))
+	if parseErr != nil {
+		return "", "", fmt.Errorf("invalid end time")
+	}
+	end = parsed.Format("15:04")
+	if start == end {
+		return "", "", fmt.Errorf("start and end must differ")
+	}
+	return start, end, nil
+}
+
 func parseID(data string) (int64, error) {
 	parts := strings.Split(data, ":")
 	if len(parts) == 0 {
@@ -607,38 +923,82 @@ func parseID(data string) (int64, error) {
 }
 
 func welcomeText(user *domain.User) string {
-	return fmt.Sprintf(
-		"👋 Привет, %s.\nЯ помогу вести утренние активности, план дня и напоминания.\nИспользуй меню ниже или команду /today.",
-		user.Name,
-	)
+	return tr("welcome_text", user.Name)
 }
 
 func helpText() string {
-	return "Доступно меню: 📅 Сегодня, 🧩 Активности, 📝 Разовые дела, ⚙️ Настройки, 📊 Статистика. Для первого запуска используй /start."
+	return tr("help_text")
 }
 
 func activitiesText(activities []domain.Activity) string {
+	return activitiesTextPage(activities, 0, defaultInlinePageSize)
+}
+
+func activitiesTextPage(activities []domain.Activity, page, pageSize int) string {
 	if len(activities) == 0 {
-		return "🗒 Список пуст. Добавь первую активность."
+		return tr("activity_list_empty")
 	}
 
-	lines := make([]string, 0, len(activities)+1)
-	lines = append(lines, "🧩 Текущий список:")
-	for i, activity := range activities {
-		lines = append(lines, fmt.Sprintf("%d. %s", i+1, activity.Title))
+	view := paginate(activities, page, pageSize)
+	lines := make([]string, 0, len(view.Items)+2)
+	lines = append(lines, tr("activity_list_title"))
+	if view.TotalPages > 1 {
+		lines = append(lines, pageSummary(view.Page, view.TotalPages, view.Start, view.End, view.TotalItems))
+	}
+	for i, activity := range view.Items {
+		lines = append(lines, fmt.Sprintf("%d. %s", view.Start+i+1, activity.Title))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func selectionText(plan *domain.DayPlan) string {
-	lines := []string{
-		"✅ Отметь, что сегодня делать не будешь.",
-		"📌 По умолчанию выбрано всё.",
+func activityDetailText(prefix string, activity domain.Activity) string {
+	timesPerDay := activity.TimesPerDay
+	if timesPerDay < 1 {
+		timesPerDay = 1
 	}
-	for _, item := range plan.Items {
-		status := "делаю"
+
+	window := tr("activity_window_none")
+	if activity.ReminderWindowStart != "" && activity.ReminderWindowEnd != "" {
+		window = tr("activity_window_value", activity.ReminderWindowStart, activity.ReminderWindowEnd)
+	}
+
+	lines := []string{
+		prefix,
+		"",
+		tr("activity_detail_name", activity.Title),
+		tr("activity_detail_times", timesPerDay),
+		tr("activity_detail_window", window),
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func findActivityByID(activities []domain.Activity, activityID int64) (domain.Activity, bool) {
+	for _, activity := range activities {
+		if activity.ID == activityID {
+			return activity, true
+		}
+	}
+	return domain.Activity{}, false
+}
+
+func selectionText(plan *domain.DayPlan) string {
+	return selectionTextPage(plan, 0, defaultInlinePageSize)
+}
+
+func selectionTextPage(plan *domain.DayPlan, page, pageSize int) string {
+	view := paginate(plan.Items, page, pageSize)
+	lines := []string{
+		tr("today_selection_intro"),
+		tr("today_selection_default"),
+	}
+	if view.TotalPages > 1 {
+		lines = append(lines, pageSummary(view.Page, view.TotalPages, view.Start, view.End, view.TotalItems))
+	}
+	for _, item := range view.Items {
+		status := tr("today_selection_status_do")
 		if !item.Selected {
-			status = "пропускаю"
+			status = tr("today_selection_status_skip")
 		}
 		lines = append(lines, fmt.Sprintf("- %s: %s", item.TitleSnapshot, status))
 	}
@@ -647,66 +1007,145 @@ func selectionText(plan *domain.DayPlan) string {
 
 func todayPlanErrorText(err error) string {
 	if errors.Is(err, domain.ErrNoActivities) {
-		return "🧩 Список активностей пока пуст. Сначала добавь хотя бы одну активность в разделе «Активности»."
+		return tr("today_error_no_activities")
 	}
-	return "❌ Не получилось открыть план дня: " + err.Error()
+	return tr("today_error_open", err.Error())
 }
 
 func statsText(stats domain.DailyStats) string {
-	return fmt.Sprintf(
-		"📊 Статистика:\n- дней с планом: %d\n- завершённых дней: %d\n- выбранных активностей: %d\n- завершённых активностей: %d\n- пропущенных активностей: %d\n- процент выполнения: %.0f%%\n- разовых дел: %d\n- завершённых разовых дел: %d\n- активных разовых дел: %d\n- чекбоксов в разовых делах: %d\n- завершённых чекбоксов: %d\n- процент выполнения разовых дел: %.0f%%",
-		stats.DaysWithPlan,
-		stats.CompletedDays,
-		stats.SelectedActivities,
-		stats.CompletedActivities,
-		stats.SkippedActivities,
-		stats.CompletionRate*100,
-		stats.OneOffTasks,
-		stats.CompletedOneOffTasks,
-		stats.PendingOneOffTasks,
-		stats.OneOffChecklistItems,
-		stats.CompletedOneOffChecklistItems,
-		stats.OneOffCompletionRate*100,
-	)
+	lines := []string{
+		tr("stats_header"),
+		tr("stats_days", progressRatio(stats.CompletedDays, stats.DaysWithPlan)),
+		tr("stats_days_with_plan", stats.DaysWithPlan),
+		tr("stats_streak", stats.CurrentCompletedStreak),
+		"",
+		tr("stats_activities", progressRatio(stats.CompletedActivities, stats.SelectedActivities)),
+		tr("stats_selected", stats.SelectedActivities),
+		tr("stats_completed", stats.CompletedActivities),
+		tr("stats_skipped", stats.SkippedActivities),
+		"",
+		tr("stats_oneoff", progressRatio(stats.CompletedOneOffTasks, stats.OneOffTasks)),
+		tr("stats_total", stats.OneOffTasks),
+		tr("stats_pending", stats.PendingOneOffTasks),
+		tr("stats_oneoff_completed", stats.CompletedOneOffTasks),
+		"",
+		tr("stats_oneoff_checklist", progressRatio(stats.CompletedOneOffChecklistItems, stats.OneOffChecklistItems)),
+		tr("stats_oneoff_checklist_total", stats.OneOffChecklistItems),
+		tr("stats_oneoff_checklist_completed", stats.CompletedOneOffChecklistItems),
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func planStatusLabel(status domain.PlanStatus) string {
 	switch status {
 	case domain.PlanStatusAwaitingSelection:
-		return "ожидает выбора"
+		return tr("today_status_awaiting_selection")
 	case domain.PlanStatusActive:
-		return "в процессе"
+		return tr("today_status_active")
 	case domain.PlanStatusCompleted:
-		return "завершён"
+		return tr("today_status_completed")
 	default:
 		return string(status)
 	}
 }
 
 func progressText(plan *domain.DayPlan) string {
+	return progressTextPage(plan, 0, defaultInlinePageSize)
+}
+
+func progressTextPage(plan *domain.DayPlan, page, pageSize int) string {
+	allSelected := make([]domain.DayPlanItem, 0, len(plan.Items))
 	completed := make([]string, 0)
 	remaining := make([]string, 0)
 	for _, item := range plan.Items {
+		if item.Selected {
+			allSelected = append(allSelected, item)
+		}
+	}
+
+	view := paginate(allSelected, page, pageSize)
+	for _, item := range view.Items {
+		timesPerDay := item.TimesPerDay
+		if timesPerDay < 1 {
+			timesPerDay = 1
+		}
 		switch {
-		case !item.Selected:
-			continue
 		case item.Completed:
-			completed = append(completed, item.TitleSnapshot)
+			completed = append(completed, html.EscapeString(item.TitleSnapshot))
+		case timesPerDay > 1 && item.CompletedCount > 0:
+			remaining = append(remaining, fmt.Sprintf("%s (%d/%d)", html.EscapeString(item.TitleSnapshot), item.CompletedCount, timesPerDay))
 		default:
-			remaining = append(remaining, item.TitleSnapshot)
+			remaining = append(remaining, html.EscapeString(item.TitleSnapshot))
 		}
 	}
 
 	lines := []string{
-		fmt.Sprintf("📍 Статус дня: %s", planStatusLabel(plan.Status)),
-		fmt.Sprintf("✅ Готово: %d", len(completed)),
-		fmt.Sprintf("⏳ Осталось: %d", len(remaining)),
+		tr("today_status_line", html.EscapeString(planStatusLabel(plan.Status))),
+		tr("today_progress_line", progressRatio(countCompletedItems(plan), countSelectedItems(plan))),
+	}
+	if view.TotalPages > 1 {
+		lines = append(lines, pageSummary(view.Page, view.TotalPages, view.Start, view.End, view.TotalItems))
 	}
 	if len(completed) > 0 {
-		lines = append(lines, "🎯 Сделано: "+strings.Join(completed, ", "))
+		lines = append(lines, decoratedLines(tr("today_done_title"), completed)...)
 	}
 	if len(remaining) > 0 {
-		lines = append(lines, "📌 Осталось: "+strings.Join(remaining, ", "))
+		lines = append(lines, decoratedLines(tr("today_remaining_title"), remaining)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func settingsText(user *domain.User, tickMinutes int, oneOffSettings *domain.OneOffReminderSettings) string {
+	lines := []string{
+		tr("settings_summary_language", tr("language_ru")),
+		tr("settings_summary_timezone", formatUTCOffset(user.UTCOffsetMinutes)),
+		tr("settings_summary_morning", user.MorningTime),
+		tr("settings_summary_interval", user.ReminderIntervalMinutes),
+		tr("settings_summary_tick", tickMinutes),
+		tr(
+			"settings_summary_oneoff",
+			oneOffSettings.LowPriorityMinutes,
+			oneOffSettings.MediumPriorityMinutes,
+			oneOffSettings.HighPriorityMinutes,
+		),
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func formatUTCOffset(offsetMinutes int) string {
+	sign := "+"
+	if offsetMinutes < 0 {
+		sign = "-"
+		offsetMinutes = -offsetMinutes
+	}
+
+	hours := offsetMinutes / 60
+	minutes := offsetMinutes % 60
+	return fmt.Sprintf("UTC%s%02d:%02d", sign, hours, minutes)
+}
+
+func progressRatio(done, total int) string {
+	return fmt.Sprintf("%d/%d (%d%%)", done, total, roundedPercent(done, total))
+}
+
+func roundedPercent(done, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(done) * 100 / float64(total)))
+}
+
+func decoratedLines(title string, items []string) []string {
+	lines := []string{title}
+	for i, item := range items {
+		lines = append(lines, fmt.Sprintf("%s %s", decorativeBullet(i), item))
+	}
+	return lines
+}
+
+func decorativeBullet(index int) string {
+	bullets := []string{"▪️", "🔺", "♦️", "🔹", "🔸"}
+	return bullets[index%len(bullets)]
 }

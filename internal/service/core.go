@@ -126,11 +126,12 @@ func (s *Service) AddActivities(ctx context.Context, userID int64, input string)
 	created := make([]domain.Activity, 0, len(titles))
 	for i, title := range titles {
 		activity := domain.Activity{
-			UserID:    userID,
-			Title:     title,
-			SortOrder: len(existingActivities) + i + 1,
-			CreatedAt: now,
-			UpdatedAt: now,
+			UserID:      userID,
+			Title:       title,
+			SortOrder:   len(existingActivities) + i + 1,
+			TimesPerDay: 1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
 
 		if err := s.repo.CreateActivity(ctx, &activity); err != nil {
@@ -150,6 +151,17 @@ func (s *Service) UpdateActivity(ctx context.Context, userID, activityID int64, 
 	}
 
 	return s.repo.UpdateActivity(ctx, userID, activityID, cleanTitle)
+}
+
+func (s *Service) SetActivityTimesPerDay(ctx context.Context, userID, activityID int64, times int) error {
+	if times < 1 {
+		return fmt.Errorf("times per day must be at least 1")
+	}
+	return s.repo.UpdateActivityTimesPerDay(ctx, userID, activityID, times)
+}
+
+func (s *Service) SetActivityReminderWindow(ctx context.Context, userID, activityID int64, windowStart, windowEnd string) error {
+	return s.repo.UpdateActivityReminderWindow(ctx, userID, activityID, windowStart, windowEnd)
 }
 
 func (s *Service) DeleteActivity(ctx context.Context, userID, activityID int64) error {
@@ -196,11 +208,16 @@ func (s *Service) StartMorningPlan(ctx context.Context, userID int64, now time.T
 
 	plan.Items = make([]domain.DayPlanItem, 0, len(activities))
 	for _, activity := range activities {
+		timesPerDay := activity.TimesPerDay
+		if timesPerDay < 1 {
+			timesPerDay = 1
+		}
 		plan.Items = append(plan.Items, domain.DayPlanItem{
 			ActivityID:    activity.ID,
 			TitleSnapshot: activity.Title,
 			Selected:      true,
 			Completed:     false,
+			TimesPerDay:   timesPerDay,
 			CreatedAt:     stamp,
 			UpdatedAt:     stamp,
 		})
@@ -316,6 +333,17 @@ func (s *Service) PickReminder(ctx context.Context, userID int64, now time.Time)
 		return nil, nil, domain.ErrPlanNotReady
 	}
 
+	// Load activities to check per-activity reminder windows.
+	activities, err := s.repo.ListActivities(ctx, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	actMap := make(map[int64]domain.Activity, len(activities))
+	for _, a := range activities {
+		actMap[a.ID] = a
+	}
+	clock := localClockHHMM(now, user.UTCOffsetMinutes)
+
 	// Within one cycle, each selected item can be reminded at most once.
 	// When every selected item has been touched in current cycle, increment cycle
 	// and start a new pass over remaining not-completed items.
@@ -328,7 +356,20 @@ func (s *Service) PickReminder(ctx context.Context, userID int64, now time.Time)
 		return nil, nil, domain.ErrPlanClosed
 	}
 
-	index := candidates[s.rng.Intn(len(candidates))]
+	// Filter candidates to those whose reminder window is currently open.
+	windowCandidates := make([]int, 0, len(candidates))
+	for _, idx := range candidates {
+		act, ok := actMap[plan.Items[idx].ActivityID]
+		if !ok || isInReminderWindow(act, clock) {
+			windowCandidates = append(windowCandidates, idx)
+		}
+	}
+	if len(windowCandidates) == 0 {
+		// All pending activities are outside their reminder windows; skip this tick.
+		return nil, nil, domain.ErrPlanNotReady
+	}
+
+	index := windowCandidates[s.rng.Intn(len(windowCandidates))]
 	plan.Items[index].ReminderCycle = plan.Cycle
 	plan.Items[index].UpdatedAt = now.UTC()
 	nextReminder := now.Add(time.Duration(user.ReminderIntervalMinutes) * time.Minute).UTC()
@@ -341,6 +382,25 @@ func (s *Service) PickReminder(ctx context.Context, userID int64, now time.Time)
 
 	item := plan.Items[index]
 	return &item, plan, nil
+}
+
+func localClockHHMM(now time.Time, utcOffsetMinutes int) string {
+	return now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute).Format("15:04")
+}
+
+// isInReminderWindow returns true if the activity has no window restriction or if
+// localClock (format "HH:MM") falls inside the configured window. Supports
+// midnight-crossing windows (e.g. ReminderWindowStart="22:00", End="06:00").
+func isInReminderWindow(act domain.Activity, localClock string) bool {
+	if act.ReminderWindowStart == "" || act.ReminderWindowEnd == "" {
+		return true
+	}
+	s, e := act.ReminderWindowStart, act.ReminderWindowEnd
+	if s <= e {
+		return localClock >= s && localClock < e
+	}
+	// Window crosses midnight.
+	return localClock >= s || localClock < e
 }
 
 func (s *Service) MarkActivityDone(ctx context.Context, userID, activityID int64, now time.Time) (*domain.DayPlan, error) {
@@ -357,10 +417,17 @@ func (s *Service) MarkActivityDone(ctx context.Context, userID, activityID int64
 		if plan.Items[i].ActivityID != activityID {
 			continue
 		}
-		plan.Items[i].Completed = true
-		plan.Items[i].CompletedAt = &stamp
+		timesPerDay := plan.Items[i].TimesPerDay
+		if timesPerDay < 1 {
+			timesPerDay = 1
+		}
+		plan.Items[i].CompletedCount++
 		plan.Items[i].UpdatedAt = stamp
 		plan.UpdatedAt = stamp
+		if plan.Items[i].CompletedCount >= timesPerDay {
+			plan.Items[i].Completed = true
+			plan.Items[i].CompletedAt = &stamp
+		}
 
 		if pendingSelectedCount(plan) == 0 {
 			s.completePlan(plan, stamp)

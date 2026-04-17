@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -102,7 +101,7 @@ func (s *Scheduler) handleMorning(ctx context.Context, user domain.User, now tim
 	}
 
 	s.logger.Info("scheduler sending morning plan", "user_id", user.ID, "chat_id", user.ChatID, "day", plan.DayLocal, "items", len(plan.Items))
-	s.router.sendMessage(ctx, user.ChatID, selectionText(plan), buildPlanSelectionKeyboard(plan))
+	s.router.showScreen(ctx, user.ChatID, selectionText(plan), buildPlanSelectionKeyboard(plan))
 }
 
 func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now time.Time) {
@@ -124,7 +123,7 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 	}
 	if errors.Is(err, domain.ErrPlanClosed) {
 		s.logger.Info("scheduler detected completed plan", "user_id", user.ID, "chat_id", user.ChatID, "day", plan.DayLocal)
-		s.router.sendMessage(ctx, user.ChatID, completionMessage(updatedPlan), s.router.mainMenu)
+		s.router.showScreen(ctx, user.ChatID, completionMessage(updatedPlan), s.router.mainMenu)
 		return
 	}
 	if err != nil {
@@ -141,7 +140,7 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 		"activity_title", item.TitleSnapshot,
 		"cycle", updatedPlan.Cycle,
 	)
-	s.router.sendMessage(ctx, user.ChatID, reminderText(item, updatedPlan), buildReminderKeyboard(item))
+	s.router.sendMessage(ctx, user.ChatID, reminderText(item, updatedPlan), nil)
 }
 
 func (s *Scheduler) handleOneOffReminder(ctx context.Context, user domain.User, now time.Time) {
@@ -183,23 +182,15 @@ func (s *Scheduler) shouldProcessUser(userID int64, now time.Time, tickIntervalM
 	return true
 }
 
-func reminderText(item *domain.DayPlanItem, plan *domain.DayPlan) string {
-	pending := 0
-	for _, candidate := range plan.Items {
-		if candidate.Selected && !candidate.Completed {
-			pending++
-		}
-	}
-
+func reminderText(item *domain.DayPlanItem, _ *domain.DayPlan) string {
 	lines := []string{
-		"🔔 Напоминание.",
-		fmt.Sprintf("👉 Сейчас лучше сделать: %s", item.TitleSnapshot),
-		fmt.Sprintf("📌 Осталось активностей: %d", pending),
+		tr("reminder_text_title"),
+		tr("reminder_text_now", item.TitleSnapshot),
 	}
 
 	return strings.Join(lines, "\n")
 }
 
 func completionMessage(plan *domain.DayPlan) string {
-	return "🎉 Все активности на сегодня закрыты. Отличная работа."
+	return tr("completion_message")
 }
