@@ -1,0 +1,109 @@
+scenes:
+  - id: menu
+    text: messages.menu.guest
+    text_registered: messages.menu.registered
+    keyboard: main_menu
+    render_mode: DELETE_MESSAGE
+  - id: reg_name
+    text: messages.registration.ask_name
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: registration_name
+  - id: reg_offset
+    text: messages.registration.ask_offset
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: registration_offset
+  - id: reg_morning
+    text: messages.registration.ask_morning
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: registration_morning
+  - id: activity_add
+    text: messages.activity.add
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: activity_add_input
+  - id: activity_edit
+    text: messages.activity.edit
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: activity_edit_input
+  - id: activity_times
+    text: messages.activity.times
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: activity_times_input
+  - id: activity_window
+    text: messages.activity.window
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: activity_window_input
+  - id: settings_morning
+    text: messages.settings.morning
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: settings_morning_input
+  - id: settings_interval
+    text: messages.settings.interval
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: settings_interval_input
+  - id: settings_tick
+    text: messages.settings.tick
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: settings_tick_input
+  - id: settings_oneoff
+    text: messages.settings.oneoff
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: settings_oneoff_input
+  - id: oneoff_title
+    text: messages.oneoff.title
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: oneoff_title_input
+  - id: oneoff_priority
+    text: messages.oneoff.priority
+    keyboard: registration_back
+    render_mode: DELETE_MESSAGE
+  - id: oneoff_items
+    text: messages.oneoff.items
+    keyboard: registration_back
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: oneoff_items_input
+
+commands:
+  - command: /start
+    scene: menu
+  - command: /help
+    scene: menu
+
+dialogs: []

@@ -3,23 +3,10 @@ package telegram
 import (
 	"fmt"
 
-	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	replykbd "github.com/go-telegram/ui/keyboard/reply"
 
 	"jesterbot/internal/domain"
 )
-
-func buildMainMenu(b *bot.Bot, r *Router) *replykbd.ReplyKeyboard {
-	return replykbd.New(replykbd.ResizableKeyboard()).
-		Button(tr("main_menu_today"), b, bot.MatchTypeExact, r.handleTodayCommand).
-		Button(tr("main_menu_activities"), b, bot.MatchTypeExact, r.handleActivitiesCommand).
-		Row().
-		Button(tr("main_menu_oneoff"), b, bot.MatchTypeExact, r.handleOneOffTasksCommand).
-		Button(tr("main_menu_settings"), b, bot.MatchTypeExact, r.handleSettingsCommand).
-		Row().
-		Button(tr("main_menu_stats"), b, bot.MatchTypeExact, r.handleStatsCommand)
-}
 
 func buildActivitiesKeyboard(activities []domain.Activity) models.ReplyMarkup {
 	return buildActivitiesKeyboardPage(activities, 0, defaultInlinePageSize)

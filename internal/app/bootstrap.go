@@ -17,7 +17,7 @@ type App struct {
 	Logger    *slog.Logger
 	DB        *sql.DB
 	Service   *service.Service
-	Telegram  *telegram.Router
+	Telegram  *telegram.Transport
 	Scheduler *telegram.Scheduler
 }
 
@@ -42,20 +42,20 @@ func New(logger *slog.Logger) (*App, error) {
 
 	repo := sqlite.NewRepository(db)
 	svc := service.New(repo, cfg.DefaultReminderMinutes)
-	router, err := telegram.NewRouter(logger, cfg.BotToken, cfg.PollTimeout, cfg.WorkerCount, svc)
+	transport, err := telegram.NewTransport(logger, cfg.BotToken, cfg.PollTimeout, cfg.WorkerCount, svc)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	logger.Info("telegram router initialized", "worker_count", cfg.WorkerCount, "poll_timeout", cfg.PollTimeout.String())
+	logger.Info("telegram transport initialized", "worker_count", cfg.WorkerCount, "poll_timeout", cfg.PollTimeout.String())
 
 	return &App{
 		Config:    cfg,
 		Logger:    logger,
 		DB:        db,
 		Service:   svc,
-		Telegram:  router,
-		Scheduler: telegram.NewScheduler(logger, svc, router),
+		Telegram:  transport,
+		Scheduler: telegram.NewScheduler(logger, svc, transport.Notifier()),
 	}, nil
 }
 

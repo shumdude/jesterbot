@@ -1,0 +1,37 @@
+keyboards:
+  main_menu:
+    - - id: register
+        text: buttons.register
+        action: goto
+        target: reg_name
+        show_if: unregistered
+    - - id: today
+        text: buttons.today
+        action: handler
+        target: open_today
+        show_if: registered
+      - id: activities
+        text: buttons.activities
+        action: handler
+        target: open_activities
+        show_if: registered
+    - - id: oneoff
+        text: buttons.oneoff
+        action: handler
+        target: open_oneoff
+        show_if: registered
+      - id: settings
+        text: buttons.settings
+        action: handler
+        target: open_settings
+        show_if: registered
+    - - id: stats
+        text: buttons.stats
+        action: handler
+        target: open_stats
+        show_if: registered
+  registration_back:
+    - - id: back_to_menu
+        text: buttons.back
+        action: goto
+        target: menu

@@ -16,15 +16,15 @@ const schedulerTick = time.Minute
 type Scheduler struct {
 	logger      *slog.Logger
 	service     *service.Service
-	router      *Router
+	notifier    Notifier
 	lastUserRun map[int64]time.Time
 }
 
-func NewScheduler(logger *slog.Logger, svc *service.Service, router *Router) *Scheduler {
+func NewScheduler(logger *slog.Logger, svc *service.Service, notifier Notifier) *Scheduler {
 	return &Scheduler{
 		logger:      logger,
 		service:     svc,
-		router:      router,
+		notifier:    notifier,
 		lastUserRun: make(map[int64]time.Time),
 	}
 }
@@ -101,7 +101,7 @@ func (s *Scheduler) handleMorning(ctx context.Context, user domain.User, now tim
 	}
 
 	s.logger.Info("scheduler sending morning plan", "user_id", user.ID, "chat_id", user.ChatID, "day", plan.DayLocal, "items", len(plan.Items))
-	s.router.showScreen(ctx, user.ChatID, selectionText(plan), buildPlanSelectionKeyboard(plan))
+	s.notifier.ShowMorningPlan(ctx, user.ChatID, plan)
 }
 
 func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now time.Time) {
@@ -123,7 +123,7 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 	}
 	if errors.Is(err, domain.ErrPlanClosed) {
 		s.logger.Info("scheduler detected completed plan", "user_id", user.ID, "chat_id", user.ChatID, "day", plan.DayLocal)
-		s.router.showScreen(ctx, user.ChatID, completionMessage(updatedPlan), s.router.mainMenu)
+		s.notifier.ShowPlanCompletion(ctx, user.ChatID, user.ID, updatedPlan)
 		return
 	}
 	if err != nil {
@@ -140,7 +140,7 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 		"activity_title", item.TitleSnapshot,
 		"cycle", updatedPlan.Cycle,
 	)
-	s.router.sendMessage(ctx, user.ChatID, reminderText(item, updatedPlan), nil)
+	s.notifier.SendReminder(ctx, user.ChatID, item, updatedPlan)
 }
 
 func (s *Scheduler) handleOneOffReminder(ctx context.Context, user domain.User, now time.Time) {
@@ -161,7 +161,7 @@ func (s *Scheduler) handleOneOffReminder(ctx context.Context, user domain.User, 
 		"task_title", task.Title,
 		"priority", task.Priority,
 	)
-	s.router.sendMessage(ctx, user.ChatID, oneOffReminderText(task), buildOneOffReminderKeyboard(task))
+	s.notifier.SendOneOffReminder(ctx, user.ChatID, task)
 }
 
 func localClock(now time.Time, offsetMinutes int) string {
