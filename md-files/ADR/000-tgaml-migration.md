@@ -1,4 +1,4 @@
-# ADR: tgaml bootstrap migration
+# ADR 000: tgaml bootstrap migration
 
 ## Status
 
