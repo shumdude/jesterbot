@@ -6,7 +6,7 @@ Accepted for the current migration phase.
 
 ## Decision
 
-- `jesterbot` connects `tgaml` through a local module replacement: `replace gobot => ../gobot`.
+- `jesterbot` connects `tgaml` as a standalone module: `github.com/shumdude/tgaml`.
 - The runtime FSM uses `github.com/go-telegram/fsm`.
 - For this phase the FSM backend stays in-memory, which preserves the current bot behavior where transport session state is not persisted across restarts.
 - The old `internal/telegram.Router` remains as a compatibility bridge for non-migrated UI flows, callback handlers, and scheduler delivery.

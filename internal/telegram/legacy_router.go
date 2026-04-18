@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-telegram/bot"
 
-	tgamlengine "gobot/tgaml/pkg/engine"
+	tgamlengine "github.com/shumdude/tgaml/pkg/engine"
 
 	"jesterbot/internal/domain"
 	"jesterbot/internal/service"

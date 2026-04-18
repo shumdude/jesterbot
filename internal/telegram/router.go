@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	tgamlengine "gobot/tgaml/pkg/engine"
-	tgamlsession "gobot/tgaml/pkg/session"
+	tgamlengine "github.com/shumdude/tgaml/pkg/engine"
+	tgamlsession "github.com/shumdude/tgaml/pkg/session"
 
 	"jesterbot/internal/domain"
 	"jesterbot/internal/service"

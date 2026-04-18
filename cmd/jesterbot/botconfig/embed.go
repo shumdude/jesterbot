@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	tgamlconfig "gobot/tgaml/pkg/config"
+	tgamlconfig "github.com/shumdude/tgaml/pkg/config"
 )
 
 //go:embed config/*.yaml
