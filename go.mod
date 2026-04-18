@@ -5,14 +5,14 @@ go 1.24.7
 require (
 	github.com/go-telegram/bot v1.20.0
 	github.com/go-telegram/fsm v0.2.1-0.20250212161401-8e54b70cd0f2
-	github.com/go-telegram/ui v0.5.1
-	gobot v0.0.0
+	github.com/shumdude/tgaml v0.0.0-20260418071712-4d57d7fb5472
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.46.1
 )
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/go-telegram/ui v0.5.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -23,5 +23,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace gobot => ../gobot
