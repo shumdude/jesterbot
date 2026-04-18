@@ -463,7 +463,7 @@ func (r *Controller) showMainMenuFromCallback(ctx context.Context, chatID, userI
 	_ = sess.ClearNamespace(constants.NSActivity)
 	_ = sess.Transition(ctx, constants.SceneMenu)
 	r.deleteMessage(ctx, chatID, currentMessageID)
-	r.showScreen(ctx, chatID, helpText(), r.menuMarkup(userID, chatID))
+	r.showScreen(ctx, chatID, r.eng.T("messages.menu.registered"), r.menuMarkup(userID, chatID))
 }
 
 func usesHTMLParseMode(text string) bool {
@@ -562,10 +562,6 @@ func parseID(data string) (int64, error) {
 
 func welcomeText(user *domain.User) string {
 	return tr("welcome_text", user.Name)
-}
-
-func helpText() string {
-	return tr("help_text")
 }
 
 func activitiesText(activities []domain.Activity) string {

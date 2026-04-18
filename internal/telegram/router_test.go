@@ -232,6 +232,19 @@ func TestBuildPlanSelectionKeyboardPageUsesPageAwareCallbacks(t *testing.T) {
 	}
 }
 
+func TestParseIDPageCallbackSupportsDoneButtons(t *testing.T) {
+	activityID, page, err := parseIDPageCallback("done:42:3")
+	if err != nil {
+		t.Fatalf("expected done callback to parse, got %v", err)
+	}
+	if activityID != 42 {
+		t.Fatalf("expected activity id 42, got %d", activityID)
+	}
+	if page != 3 {
+		t.Fatalf("expected page 3, got %d", page)
+	}
+}
+
 func TestBuildProgressKeyboardAlwaysIncludesMainMenuBack(t *testing.T) {
 	markup := buildProgressKeyboard(&domain.DayPlan{
 		Items: []domain.DayPlanItem{

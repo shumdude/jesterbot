@@ -114,7 +114,7 @@ func parsePageCallback(data string) (int, error) {
 
 func parseIDPageCallback(data string) (int64, int, error) {
 	parts := strings.Split(data, ":")
-	if len(parts) < 4 {
+	if len(parts) < 3 {
 		return 0, 0, fmt.Errorf("invalid id-page callback: %s", data)
 	}
 

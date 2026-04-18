@@ -94,10 +94,16 @@ func registrationMorningHandler(eng *tgamlengine.Engine, svc *service.Service, u
 }
 
 func openLegacyScreenHandler(eng *tgamlengine.Engine, svc *service.Service, open func(context.Context, int64, int64)) tgamlengine.HandlerFunc {
-	return func(ctx context.Context, b *bot.Bot, _ *models.Update, s *tgamlsession.Session) (string, error) {
+	return func(ctx context.Context, b *bot.Bot, u *models.Update, s *tgamlsession.Session) (string, error) {
 		_, err := svc.FindUserByTelegramID(ctx, s.UserID)
 		switch {
 		case err == nil:
+			if u != nil && u.CallbackQuery != nil && u.CallbackQuery.Message.Message != nil {
+				_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+					ChatID:    s.ChatID,
+					MessageID: u.CallbackQuery.Message.Message.ID,
+				})
+			}
 			open(ctx, s.ChatID, s.UserID)
 			return "", nil
 		case errors.Is(err, domain.ErrNotFound):
