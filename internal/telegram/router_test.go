@@ -19,7 +19,7 @@ func TestBuildActivitiesKeyboardAddsBackButton(t *testing.T) {
 	}
 
 	lastRow := inline.InlineKeyboard[len(inline.InlineKeyboard)-1]
-	if len(lastRow) != 1 || lastRow[0].CallbackData != "activity:back" {
+	if len(lastRow) != 1 || lastRow[0].CallbackData != "menu:back" {
 		t.Fatalf("expected back button row, got %+v", lastRow)
 	}
 }
@@ -74,6 +74,9 @@ func TestBuildActivityDetailKeyboardUsesPageAwareCallbacks(t *testing.T) {
 	}
 	if inline.InlineKeyboard[3][0].CallbackData != "activity:list:2" {
 		t.Fatalf("expected list callback, got %+v", inline.InlineKeyboard[3][0])
+	}
+	if inline.InlineKeyboard[4][0].CallbackData != "menu:back" {
+		t.Fatalf("expected main menu callback, got %+v", inline.InlineKeyboard[4][0])
 	}
 }
 
@@ -221,6 +224,105 @@ func TestBuildPlanSelectionKeyboardPageUsesPageAwareCallbacks(t *testing.T) {
 	firstRow := inline.InlineKeyboard[0]
 	if firstRow[0].CallbackData != "plan:toggle:13:1" {
 		t.Fatalf("expected paged toggle callback, got %+v", firstRow[0])
+	}
+
+	lastRow := inline.InlineKeyboard[len(inline.InlineKeyboard)-1]
+	if lastRow[0].CallbackData != "menu:back" {
+		t.Fatalf("expected main menu callback, got %+v", lastRow[0])
+	}
+}
+
+func TestParseIDPageCallbackSupportsDoneButtons(t *testing.T) {
+	activityID, page, err := parseIDPageCallback("done:42:3")
+	if err != nil {
+		t.Fatalf("expected done callback to parse, got %v", err)
+	}
+	if activityID != 42 {
+		t.Fatalf("expected activity id 42, got %d", activityID)
+	}
+	if page != 3 {
+		t.Fatalf("expected page 3, got %d", page)
+	}
+}
+
+func TestBuildProgressKeyboardAlwaysIncludesMainMenuBack(t *testing.T) {
+	markup := buildProgressKeyboard(&domain.DayPlan{
+		Items: []domain.DayPlanItem{
+			{ActivityID: 1, TitleSnapshot: "Stretch", Selected: true, Completed: true},
+		},
+	})
+	inline, ok := markup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", markup)
+	}
+
+	if len(inline.InlineKeyboard) != 1 {
+		t.Fatalf("expected only main menu row, got %+v", inline.InlineKeyboard)
+	}
+	if inline.InlineKeyboard[0][0].CallbackData != "menu:back" {
+		t.Fatalf("expected main menu callback, got %+v", inline.InlineKeyboard[0][0])
+	}
+}
+
+func TestBuildSettingsKeyboardIncludesMainMenuBack(t *testing.T) {
+	markup := buildSettingsKeyboard()
+	inline, ok := markup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", markup)
+	}
+
+	lastRow := inline.InlineKeyboard[len(inline.InlineKeyboard)-1]
+	if lastRow[0].CallbackData != "menu:back" {
+		t.Fatalf("expected main menu callback, got %+v", lastRow[0])
+	}
+}
+
+func TestBuildStatsKeyboardIncludesMainMenuBack(t *testing.T) {
+	markup := buildStatsKeyboard()
+	inline, ok := markup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", markup)
+	}
+
+	if len(inline.InlineKeyboard) != 1 {
+		t.Fatalf("expected single row, got %+v", inline.InlineKeyboard)
+	}
+	if inline.InlineKeyboard[0][0].CallbackData != "menu:back" {
+		t.Fatalf("expected main menu callback, got %+v", inline.InlineKeyboard[0][0])
+	}
+}
+
+func TestBuildOneOffKeyboardsIncludeMainMenuBack(t *testing.T) {
+	listMarkup := buildOneOffTasksKeyboard([]domain.OneOffTask{{ID: 1, Title: "Pay bill", Priority: domain.OneOffTaskPriorityMedium, Status: domain.OneOffTaskStatusActive}})
+	listInline, ok := listMarkup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", listMarkup)
+	}
+	if listInline.InlineKeyboard[len(listInline.InlineKeyboard)-1][0].CallbackData != "menu:back" {
+		t.Fatalf("expected one-off list main menu callback, got %+v", listInline.InlineKeyboard[len(listInline.InlineKeyboard)-1][0])
+	}
+
+	priorityMarkup := buildOneOffPriorityKeyboard()
+	priorityInline, ok := priorityMarkup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", priorityMarkup)
+	}
+	if priorityInline.InlineKeyboard[len(priorityInline.InlineKeyboard)-1][0].CallbackData != "menu:back" {
+		t.Fatalf("expected one-off priority main menu callback, got %+v", priorityInline.InlineKeyboard[len(priorityInline.InlineKeyboard)-1][0])
+	}
+
+	detailMarkup := buildOneOffTaskDetailKeyboard(&domain.OneOffTask{
+		ID:       1,
+		Title:    "Pay bill",
+		Priority: domain.OneOffTaskPriorityMedium,
+		Status:   domain.OneOffTaskStatusActive,
+	})
+	detailInline, ok := detailMarkup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", detailMarkup)
+	}
+	if detailInline.InlineKeyboard[len(detailInline.InlineKeyboard)-1][0].CallbackData != "menu:back" {
+		t.Fatalf("expected one-off detail main menu callback, got %+v", detailInline.InlineKeyboard[len(detailInline.InlineKeyboard)-1][0])
 	}
 }
 

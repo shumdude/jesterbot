@@ -3,23 +3,10 @@ package telegram
 import (
 	"fmt"
 
-	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	replykbd "github.com/go-telegram/ui/keyboard/reply"
 
 	"jesterbot/internal/domain"
 )
-
-func buildMainMenu(b *bot.Bot, r *Router) *replykbd.ReplyKeyboard {
-	return replykbd.New(replykbd.ResizableKeyboard()).
-		Button(tr("main_menu_today"), b, bot.MatchTypeExact, r.handleTodayCommand).
-		Button(tr("main_menu_activities"), b, bot.MatchTypeExact, r.handleActivitiesCommand).
-		Row().
-		Button(tr("main_menu_oneoff"), b, bot.MatchTypeExact, r.handleOneOffTasksCommand).
-		Button(tr("main_menu_settings"), b, bot.MatchTypeExact, r.handleSettingsCommand).
-		Row().
-		Button(tr("main_menu_stats"), b, bot.MatchTypeExact, r.handleStatsCommand)
-}
 
 func buildActivitiesKeyboard(activities []domain.Activity) models.ReplyMarkup {
 	return buildActivitiesKeyboardPage(activities, 0, defaultInlinePageSize)
@@ -38,7 +25,7 @@ func buildActivitiesKeyboardPage(activities []domain.Activity, page, pageSize in
 	}
 
 	rows = append(rows, []models.InlineKeyboardButton{{Text: tr("button_add_activity"), CallbackData: "activity:add"}})
-	rows = append(rows, []models.InlineKeyboardButton{{Text: tr("button_back"), CallbackData: "activity:back"}})
+	rows = append(rows, mainMenuBackRow())
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
@@ -53,6 +40,7 @@ func buildActivityDetailKeyboard(activity domain.Activity, page int) models.Repl
 		{{Text: activityWindowButton(activity), CallbackData: fmt.Sprintf("activity:window:%d:%d", activity.ID, page)}},
 		{{Text: tr("button_delete"), CallbackData: fmt.Sprintf("activity:delete:%d:%d", activity.ID, page)}},
 		{{Text: tr("button_back_to_list"), CallbackData: fmt.Sprintf("activity:list:%d", page)}},
+		mainMenuBackRow(),
 	}
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -82,6 +70,7 @@ func buildPlanSelectionKeyboardPage(plan *domain.DayPlan, page, pageSize int) mo
 		{Text: tr("button_plan_all"), CallbackData: "plan:all"},
 		{Text: tr("button_plan_start"), CallbackData: "plan:finalize"},
 	})
+	rows = append(rows, mainMenuBackRow())
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -99,7 +88,7 @@ func buildProgressKeyboardPage(plan *domain.DayPlan, page, pageSize int) models.
 	}
 
 	view := paginate(selectedItems, page, pageSize)
-	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+1)
+	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+2)
 	for _, item := range view.Items {
 		if item.Selected && !item.Completed {
 			timesPerDay := item.TimesPerDay
@@ -120,9 +109,7 @@ func buildProgressKeyboardPage(plan *domain.DayPlan, page, pageSize int) models.
 	if paginationRow := buildPaginationRow("plan:page", view.Page, view.TotalPages); len(paginationRow) > 0 {
 		rows = append(rows, paginationRow)
 	}
-	if len(rows) == 0 {
-		return nil
-	}
+	rows = append(rows, mainMenuBackRow())
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
@@ -133,6 +120,15 @@ func buildSettingsKeyboard() models.ReplyMarkup {
 			{{Text: tr("button_settings_interval"), CallbackData: "settings:interval"}},
 			{{Text: tr("button_settings_tick"), CallbackData: "settings:tick"}},
 			{{Text: tr("button_settings_oneoff"), CallbackData: "settings:oneoff"}},
+			mainMenuBackRow(),
+		},
+	}
+}
+
+func buildStatsKeyboard() models.ReplyMarkup {
+	return &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			mainMenuBackRow(),
 		},
 	}
 }
@@ -144,7 +140,7 @@ func buildOneOffTasksKeyboard(tasks []domain.OneOffTask) models.ReplyMarkup {
 func buildOneOffTasksKeyboardPage(tasks []domain.OneOffTask, page, pageSize int) models.ReplyMarkup {
 	activeTasks, _ := splitOneOffTasks(tasks)
 	view := paginate(activeTasks, page, pageSize)
-	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+2)
+	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+3)
 	for _, task := range view.Items {
 		rows = append(rows, []models.InlineKeyboardButton{
 			{Text: fmt.Sprintf("🟢 %s %s", oneOffPriorityIcon(task.Priority), task.Title), CallbackData: fmt.Sprintf("oneoff:open:%d:%d", task.ID, view.Page)},
@@ -158,6 +154,7 @@ func buildOneOffTasksKeyboardPage(tasks []domain.OneOffTask, page, pageSize int)
 	rows = append(rows, []models.InlineKeyboardButton{
 		{Text: tr("button_add_oneoff"), CallbackData: "oneoff:add"},
 	})
+	rows = append(rows, mainMenuBackRow())
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -170,6 +167,7 @@ func buildOneOffPriorityKeyboard() models.ReplyMarkup {
 				{Text: tr("button_priority_medium"), CallbackData: "oneoff:create:priority:medium"},
 				{Text: tr("button_priority_high"), CallbackData: "oneoff:create:priority:high"},
 			},
+			mainMenuBackRow(),
 		},
 	}
 }
@@ -201,6 +199,7 @@ func buildOneOffTaskDetailKeyboardPage(task *domain.OneOffTask, page int) models
 		{Text: tr("button_back_to_list"), CallbackData: fmt.Sprintf("oneoff:back:%d", page)},
 		{Text: tr("button_delete"), CallbackData: fmt.Sprintf("oneoff:delete:%d:%d", task.ID, page)},
 	})
+	rows = append(rows, mainMenuBackRow())
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -226,8 +225,13 @@ func buildOneOffReminderKeyboardPage(task *domain.OneOffTask, page int) models.R
 	rows = append(rows, []models.InlineKeyboardButton{
 		{Text: tr("button_open_oneoff"), CallbackData: fmt.Sprintf("oneoff:open:%d:%d", task.ID, page)},
 	})
+	rows = append(rows, mainMenuBackRow())
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func mainMenuBackRow() []models.InlineKeyboardButton {
+	return []models.InlineKeyboardButton{{Text: tr("button_back_to_menu"), CallbackData: "menu:back"}}
 }
 
 func activityWindowButton(a domain.Activity) string {
