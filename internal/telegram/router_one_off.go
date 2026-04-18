@@ -42,7 +42,7 @@ func (r *Controller) handleOneOffCallback(ctx context.Context, _ *bot.Bot, updat
 		sess := r.session(userID, chatID)
 		_ = sess.ClearNamespace(constants.NSOneOff)
 		_ = sess.Transition(ctx, constants.SceneAddOneOffTitle)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_title"), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_title"), r.sceneKeyboardMarkup("oneoff_title_back_menu", userID, chatID))
 	case strings.HasPrefix(data, "oneoff:back:"):
 		page, err := parsePageCallback(data)
 		if err != nil {
@@ -104,7 +104,7 @@ func (r *Controller) handleOneOffCallback(ctx context.Context, _ *bot.Bot, updat
 		}
 		_ = sess.SetStr(constants.NSOneOff, constants.KeyPriority, string(priority))
 		_ = sess.Transition(ctx, constants.SceneAddOneOffItems)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_items"), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_items"), r.sceneKeyboardMarkup("oneoff_items_back_menu", userID, chatID))
 	}
 }
 

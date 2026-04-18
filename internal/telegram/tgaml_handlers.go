@@ -26,6 +26,8 @@ func RegisterTgamlHandlers(eng *tgamlengine.Engine, svc *service.Service, ui *Co
 	eng.Register(constants.HandlerOpenOneOff, openLegacyScreenHandler(eng, svc, ui.OpenOneOffTasks))
 	eng.Register(constants.HandlerOpenSettings, openLegacyScreenHandler(eng, svc, ui.OpenSettings))
 	eng.Register(constants.HandlerOpenStats, openLegacyScreenHandler(eng, svc, ui.OpenStats))
+	eng.Register(constants.HandlerBackActivityDetail, backActivityDetailHandler(svc, ui))
+	eng.Register(constants.HandlerBackOneOffPriority, backOneOffPriorityHandler(ui))
 	eng.Register(constants.HandlerAddActivity, addActivityHandler(svc, ui))
 	eng.Register(constants.HandlerEditActivity, editActivityHandler(svc, ui))
 	eng.Register(constants.HandlerSetActivityTimes, activityTimesHandler(svc, ui))
@@ -36,6 +38,41 @@ func RegisterTgamlHandlers(eng *tgamlengine.Engine, svc *service.Service, ui *Co
 	eng.Register(constants.HandlerUpdateOneOffReminder, updateOneOffReminderHandler(svc, ui))
 	eng.Register(constants.HandlerOneOffTitle, oneOffTitleHandler(ui))
 	eng.Register(constants.HandlerOneOffItems, oneOffItemsHandler(svc, ui))
+}
+
+func backActivityDetailHandler(svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
+	return func(ctx context.Context, _ *bot.Bot, _ *models.Update, s *tgamlsession.Session) (string, error) {
+		user, err := svc.FindUserByTelegramID(ctx, s.UserID)
+		if err != nil {
+			ui.handleRegistrationRequired(ctx, s.ChatID, s.UserID)
+			return "", nil
+		}
+		activityID, err := sessionInt64(s, constants.NSActivity, constants.KeyActivityID)
+		if err != nil {
+			ui.showActivities(ctx, s.ChatID, user.ID, tr("activity_title"))
+			return "", nil
+		}
+		page := sessionInt(s, constants.NSActivity, constants.KeyActivityPage)
+		_ = s.Transition(ctx, constants.SceneMenu)
+		ui.showActivityDetail(ctx, s.ChatID, user.ID, activityID, page, tr("activity_detail_title"))
+		return "", nil
+	}
+}
+
+func backOneOffPriorityHandler(ui *Controller) tgamlengine.HandlerFunc {
+	return func(ctx context.Context, _ *bot.Bot, _ *models.Update, s *tgamlsession.Session) (string, error) {
+		title := strings.TrimSpace(s.GetStr(constants.NSOneOff, constants.KeyTaskTitle))
+		if title == "" {
+			_ = s.Transition(ctx, constants.SceneMenu)
+			ui.OpenOneOffTasks(ctx, s.ChatID, s.UserID)
+			return "", nil
+		}
+		if err := s.Transition(ctx, constants.SceneAddOneOffPriority); err != nil {
+			return "", err
+		}
+		ui.showScreen(ctx, s.ChatID, tr("oneoff_prompt_priority"), buildOneOffPriorityKeyboard())
+		return "", nil
+	}
 }
 
 func registrationNameHandler(eng *tgamlengine.Engine) tgamlengine.HandlerFunc {

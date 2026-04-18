@@ -102,5 +102,5 @@ func (r *Controller) OpenStats(ctx context.Context, chatID, telegramUserID int64
 		r.showScreen(ctx, chatID, tr("stats_error_build"), r.menuMarkup(user.ID, chatID))
 		return
 	}
-	r.showScreen(ctx, chatID, statsText(stats), r.menuMarkup(user.ID, chatID))
+	r.showScreen(ctx, chatID, statsText(stats), buildStatsKeyboard())
 }

@@ -64,7 +64,7 @@ func (r *Controller) handleActivityCallback(ctx context.Context, _ *bot.Bot, upd
 		sess := r.session(userID, chatID)
 		_ = sess.ClearNamespace(constants.NSActivity)
 		_ = sess.Transition(ctx, constants.SceneAddActivity)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_add"), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_add"), r.sceneKeyboardMarkup("activities_back_menu", userID, chatID))
 	case strings.HasPrefix(data, "activity:edit:"):
 		activityID, err := parseID(data)
 		if err != nil {
@@ -76,7 +76,7 @@ func (r *Controller) handleActivityCallback(ctx context.Context, _ *bot.Bot, upd
 			constants.KeyActivityPage: "0",
 		})
 		_ = sess.Transition(ctx, constants.SceneEditActivity)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_edit"), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_edit"), r.sceneKeyboardMarkup("activity_detail_back_menu", userID, chatID))
 	case strings.HasPrefix(data, "activity:times:"):
 		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
@@ -100,7 +100,7 @@ func (r *Controller) handleActivityCallback(ctx context.Context, _ *bot.Bot, upd
 			constants.KeyActivityPage: strconv.Itoa(page),
 		})
 		_ = sess.Transition(ctx, constants.SceneSetActivityTimes)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_times", activityTitle), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_times", activityTitle), r.sceneKeyboardMarkup("activity_detail_back_menu", userID, chatID))
 	case strings.HasPrefix(data, "activity:window:"):
 		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
@@ -128,7 +128,7 @@ func (r *Controller) handleActivityCallback(ctx context.Context, _ *bot.Bot, upd
 			constants.KeyActivityPage: strconv.Itoa(page),
 		})
 		_ = sess.Transition(ctx, constants.SceneSetActivityWindow)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_window", windowDesc), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_window", windowDesc), r.sceneKeyboardMarkup("activity_detail_back_menu", userID, chatID))
 	case strings.HasPrefix(data, "activity:delete:"):
 		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
@@ -239,11 +239,11 @@ func (r *Controller) handleSettingsCallback(ctx context.Context, _ *bot.Bot, upd
 	case "settings:morning":
 		sess := r.session(userID, chatID)
 		_ = sess.Transition(ctx, constants.SceneUpdateMorning)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("settings_prompt_morning"), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("settings_prompt_morning"), r.sceneKeyboardMarkup("settings_back_menu", userID, chatID))
 	case "settings:interval":
 		sess := r.session(userID, chatID)
 		_ = sess.Transition(ctx, constants.SceneUpdateReminder)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("settings_prompt_interval"), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("settings_prompt_interval"), r.sceneKeyboardMarkup("settings_back_menu", userID, chatID))
 	case "settings:tick":
 		user, err := r.registeredUser(ctx, update.CallbackQuery.From.ID)
 		if err != nil {
@@ -257,7 +257,7 @@ func (r *Controller) handleSettingsCallback(ctx context.Context, _ *bot.Bot, upd
 		}
 		sess := r.session(userID, chatID)
 		_ = sess.Transition(ctx, constants.SceneUpdateTick)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("settings_prompt_tick", minutes), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("settings_prompt_tick", minutes), r.sceneKeyboardMarkup("settings_back_menu", userID, chatID))
 	case "settings:oneoff":
 		user, err := r.registeredUser(ctx, update.CallbackQuery.From.ID)
 		if err != nil {
@@ -271,7 +271,7 @@ func (r *Controller) handleSettingsCallback(ctx context.Context, _ *bot.Bot, upd
 		}
 		sess := r.session(userID, chatID)
 		_ = sess.Transition(ctx, constants.SceneUpdateOneOffReminder)
-		r.showScreenFromCallback(ctx, chatID, messageID, oneOffReminderSettingsPrompt(settings), nil)
+		r.showScreenFromCallback(ctx, chatID, messageID, oneOffReminderSettingsPrompt(settings), r.sceneKeyboardMarkup("settings_back_menu", userID, chatID))
 	}
 }
 
@@ -301,6 +301,11 @@ func (r *Controller) session(userID, chatID int64) *tgamlsession.Session {
 
 func (r *Controller) menuMarkup(userID, chatID int64) models.ReplyMarkup {
 	markup := r.eng.KeyboardMarkupForUser("main_menu", r.session(userID, chatID))
+	return &markup
+}
+
+func (r *Controller) sceneKeyboardMarkup(name string, userID, chatID int64) models.ReplyMarkup {
+	markup := r.eng.KeyboardMarkupForUser(name, r.session(userID, chatID))
 	return &markup
 }
 
@@ -452,8 +457,11 @@ func (r *Controller) showScreen(ctx context.Context, chatID int64, text string, 
 }
 
 func (r *Controller) showScreenFromCallback(ctx context.Context, chatID int64, currentMessageID int, text string, markup models.ReplyMarkup) {
-	if currentMessageID != 0 && r.editMessage(ctx, chatID, currentMessageID, text, markup) {
+	if currentMessageID != 0 && supportsMessageEdit(markup) && r.editMessage(ctx, chatID, currentMessageID, text, markup) {
 		return
+	}
+	if currentMessageID != 0 && !supportsMessageEdit(markup) {
+		r.deleteMessage(ctx, chatID, currentMessageID)
 	}
 	r.sendMessage(ctx, chatID, text, markup)
 }
@@ -468,6 +476,14 @@ func (r *Controller) showMainMenuFromCallback(ctx context.Context, chatID, userI
 
 func usesHTMLParseMode(text string) bool {
 	return strings.Contains(text, "<b>") || strings.Contains(text, "</b>")
+}
+
+func supportsMessageEdit(markup models.ReplyMarkup) bool {
+	if markup == nil {
+		return true
+	}
+	_, ok := markup.(*models.InlineKeyboardMarkup)
+	return ok
 }
 
 func (r *Controller) answerCallback(ctx context.Context, callbackID string) {

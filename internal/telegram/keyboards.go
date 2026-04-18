@@ -125,6 +125,14 @@ func buildSettingsKeyboard() models.ReplyMarkup {
 	}
 }
 
+func buildStatsKeyboard() models.ReplyMarkup {
+	return &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			mainMenuBackRow(),
+		},
+	}
+}
+
 func buildOneOffTasksKeyboard(tasks []domain.OneOffTask) models.ReplyMarkup {
 	return buildOneOffTasksKeyboardPage(tasks, 0, defaultInlinePageSize)
 }

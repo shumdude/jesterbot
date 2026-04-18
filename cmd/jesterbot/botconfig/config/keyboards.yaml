@@ -35,3 +35,48 @@ keyboards:
         text: buttons.back
         action: goto
         target: menu
+  activities_back_menu:
+    - - id: back_to_activities
+        text: buttons.back
+        action: handler
+        target: open_activities
+      - id: back_to_menu
+        text: buttons.back_to_menu
+        action: goto
+        target: menu
+  activity_detail_back_menu:
+    - - id: back_to_activity_detail
+        text: buttons.back
+        action: handler
+        target: back_activity_detail
+      - id: back_to_menu
+        text: buttons.back_to_menu
+        action: goto
+        target: menu
+  settings_back_menu:
+    - - id: back_to_settings
+        text: buttons.back
+        action: handler
+        target: open_settings
+      - id: back_to_menu
+        text: buttons.back_to_menu
+        action: goto
+        target: menu
+  oneoff_title_back_menu:
+    - - id: back_to_oneoff
+        text: buttons.back
+        action: handler
+        target: open_oneoff
+      - id: back_to_menu
+        text: buttons.back_to_menu
+        action: goto
+        target: menu
+  oneoff_items_back_menu:
+    - - id: back_to_oneoff_priority
+        text: buttons.back
+        action: handler
+        target: back_oneoff_priority
+      - id: back_to_menu
+        text: buttons.back_to_menu
+        action: goto
+        target: menu

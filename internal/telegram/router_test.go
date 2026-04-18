@@ -277,6 +277,21 @@ func TestBuildSettingsKeyboardIncludesMainMenuBack(t *testing.T) {
 	}
 }
 
+func TestBuildStatsKeyboardIncludesMainMenuBack(t *testing.T) {
+	markup := buildStatsKeyboard()
+	inline, ok := markup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", markup)
+	}
+
+	if len(inline.InlineKeyboard) != 1 {
+		t.Fatalf("expected single row, got %+v", inline.InlineKeyboard)
+	}
+	if inline.InlineKeyboard[0][0].CallbackData != "menu:back" {
+		t.Fatalf("expected main menu callback, got %+v", inline.InlineKeyboard[0][0])
+	}
+}
+
 func TestBuildOneOffKeyboardsIncludeMainMenuBack(t *testing.T) {
 	listMarkup := buildOneOffTasksKeyboard([]domain.OneOffTask{{ID: 1, Title: "Pay bill", Priority: domain.OneOffTaskPriorityMedium, Status: domain.OneOffTaskStatusActive}})
 	listInline, ok := listMarkup.(*models.InlineKeyboardMarkup)

@@ -27,6 +27,8 @@ const (
 	HandlerOpenOneOff           = "open_oneoff"
 	HandlerOpenSettings         = "open_settings"
 	HandlerOpenStats            = "open_stats"
+	HandlerBackActivityDetail   = "back_activity_detail"
+	HandlerBackOneOffPriority   = "back_oneoff_priority"
 	HandlerAddActivity          = "activity_add_input"
 	HandlerEditActivity         = "activity_edit_input"
 	HandlerSetActivityTimes     = "activity_times_input"

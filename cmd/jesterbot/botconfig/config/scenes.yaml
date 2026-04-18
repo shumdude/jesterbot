@@ -27,63 +27,63 @@ scenes:
       handler_id: registration_morning
   - id: activity_add
     text: messages.activity.add
-    keyboard: registration_back
+    keyboard: activities_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: activity_add_input
   - id: activity_edit
     text: messages.activity.edit
-    keyboard: registration_back
+    keyboard: activity_detail_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: activity_edit_input
   - id: activity_times
     text: messages.activity.times
-    keyboard: registration_back
+    keyboard: activity_detail_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: activity_times_input
   - id: activity_window
     text: messages.activity.window
-    keyboard: registration_back
+    keyboard: activity_detail_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: activity_window_input
   - id: settings_morning
     text: messages.settings.morning
-    keyboard: registration_back
+    keyboard: settings_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: settings_morning_input
   - id: settings_interval
     text: messages.settings.interval
-    keyboard: registration_back
+    keyboard: settings_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: settings_interval_input
   - id: settings_tick
     text: messages.settings.tick
-    keyboard: registration_back
+    keyboard: settings_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: settings_tick_input
   - id: settings_oneoff
     text: messages.settings.oneoff
-    keyboard: registration_back
+    keyboard: settings_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: settings_oneoff_input
   - id: oneoff_title
     text: messages.oneoff.title
-    keyboard: registration_back
+    keyboard: oneoff_title_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
@@ -94,7 +94,7 @@ scenes:
     render_mode: DELETE_MESSAGE
   - id: oneoff_items
     text: messages.oneoff.items
-    keyboard: registration_back
+    keyboard: oneoff_items_back_menu
     parse_mode: Markdown
     render_mode: DELETE_MESSAGE
     on_input:
