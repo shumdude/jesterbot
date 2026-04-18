@@ -123,7 +123,7 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 	}
 	if errors.Is(err, domain.ErrPlanClosed) {
 		s.logger.Info("scheduler detected completed plan", "user_id", user.ID, "chat_id", user.ChatID, "day", plan.DayLocal)
-		s.notifier.ShowPlanCompletion(ctx, user.ChatID, user.ID, updatedPlan)
+		s.notifier.ShowPlanCompletion(ctx, user.ChatID, user.TelegramUserID, updatedPlan)
 		return
 	}
 	if err != nil {

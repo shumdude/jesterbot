@@ -37,7 +37,7 @@ func (r *Controller) RegisterLegacyHandlers() {
 }
 
 func (r *Controller) ShowWelcome(ctx context.Context, chatID int64, user *domain.User) {
-	r.showScreen(ctx, chatID, welcomeText(user), r.menuMarkup(user.ID, chatID))
+	r.showScreen(ctx, chatID, welcomeText(user), r.menuMarkup(user.TelegramUserID, chatID))
 }
 
 func (r *Controller) OpenToday(ctx context.Context, chatID, telegramUserID int64) {
@@ -53,7 +53,7 @@ func (r *Controller) OpenToday(ctx context.Context, chatID, telegramUserID int64
 		plan, err = r.service.StartMorningPlan(ctx, user.ID, now)
 	}
 	if err != nil {
-		r.showScreen(ctx, chatID, todayPlanErrorText(err), r.menuMarkup(user.ID, chatID))
+		r.showScreen(ctx, chatID, todayPlanErrorText(err), r.menuMarkup(user.TelegramUserID, chatID))
 		return
 	}
 
@@ -99,7 +99,7 @@ func (r *Controller) OpenStats(ctx context.Context, chatID, telegramUserID int64
 	}
 	stats, err := r.service.BuildStats(ctx, user.ID)
 	if err != nil {
-		r.showScreen(ctx, chatID, tr("stats_error_build"), r.menuMarkup(user.ID, chatID))
+		r.showScreen(ctx, chatID, tr("stats_error_build"), r.menuMarkup(user.TelegramUserID, chatID))
 		return
 	}
 	r.showScreen(ctx, chatID, statsText(stats), buildStatsKeyboard())
