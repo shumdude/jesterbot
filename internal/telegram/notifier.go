@@ -8,7 +8,7 @@ import (
 
 type Notifier interface {
 	ShowMorningPlan(ctx context.Context, chatID int64, plan *domain.DayPlan)
-	ShowPlanCompletion(ctx context.Context, chatID, userID int64, plan *domain.DayPlan)
+	ShowPlanCompletion(ctx context.Context, chatID, telegramUserID int64, plan *domain.DayPlan)
 	SendReminder(ctx context.Context, chatID int64, item *domain.DayPlanItem, plan *domain.DayPlan)
 	SendOneOffReminder(ctx context.Context, chatID int64, task *domain.OneOffTask)
 }
@@ -17,8 +17,8 @@ func (r *Controller) ShowMorningPlan(ctx context.Context, chatID int64, plan *do
 	r.showScreen(ctx, chatID, selectionText(plan), buildPlanSelectionKeyboard(plan))
 }
 
-func (r *Controller) ShowPlanCompletion(ctx context.Context, chatID, userID int64, plan *domain.DayPlan) {
-	r.showScreen(ctx, chatID, completionMessage(plan), r.menuMarkup(userID, chatID))
+func (r *Controller) ShowPlanCompletion(ctx context.Context, chatID, telegramUserID int64, plan *domain.DayPlan) {
+	r.showScreen(ctx, chatID, completionMessage(plan), r.menuMarkup(telegramUserID, chatID))
 }
 
 func (r *Controller) SendReminder(ctx context.Context, chatID int64, item *domain.DayPlanItem, plan *domain.DayPlan) {

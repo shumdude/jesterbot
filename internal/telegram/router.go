@@ -162,7 +162,7 @@ func (r *Controller) handlePlanCallback(ctx context.Context, _ *bot.Bot, update 
 		}
 		plan, err := r.service.GetTodayPlan(ctx, user.ID, now)
 		if err != nil {
-			r.showScreenFromCallback(ctx, chatID, messageID, todayPlanErrorText(err), r.menuMarkup(user.ID, chatID))
+			r.showScreenFromCallback(ctx, chatID, messageID, todayPlanErrorText(err), r.menuMarkup(user.TelegramUserID, chatID))
 			return
 		}
 		if plan.Status == domain.PlanStatusAwaitingSelection {
@@ -226,7 +226,7 @@ func (r *Controller) handleDoneCallback(ctx context.Context, _ *bot.Bot, update 
 	r.showScreenFromCallback(ctx, chatID, messageID, progressTextPage(plan, page, defaultInlinePageSize), buildProgressKeyboardPage(plan, page, defaultInlinePageSize))
 	if plan.Status == domain.PlanStatusCompleted {
 		r.logger.Info("day plan completed", "user_id", user.ID, "chat_id", chatID, "day", plan.DayLocal)
-		r.showScreenFromCallback(ctx, chatID, messageID, completionMessage(plan), r.menuMarkup(user.ID, chatID))
+		r.showScreenFromCallback(ctx, chatID, messageID, completionMessage(plan), r.menuMarkup(user.TelegramUserID, chatID))
 	}
 }
 
