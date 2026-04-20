@@ -60,6 +60,13 @@ scenes:
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: settings_morning_input
+  - id: settings_day_end
+    text: messages.settings.day_end
+    keyboard: settings_back_menu
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: settings_day_end_input
   - id: settings_interval
     text: messages.settings.interval
     keyboard: settings_back_menu

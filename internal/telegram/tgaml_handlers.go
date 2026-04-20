@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -26,6 +27,7 @@ func RegisterTgamlHandlers(eng *tgamlengine.Engine, svc *service.Service, ui *Co
 	eng.Register(constants.HandlerOpenOneOff, openLegacyScreenHandler(eng, svc, ui.OpenOneOffTasks))
 	eng.Register(constants.HandlerOpenSettings, openLegacyScreenHandler(eng, svc, ui.OpenSettings))
 	eng.Register(constants.HandlerOpenStats, openLegacyScreenHandler(eng, svc, ui.OpenStats))
+	eng.Register(constants.HandlerFinishDay, finishDayHandler(eng, svc, ui))
 	eng.Register(constants.HandlerBackActivityDetail, backActivityDetailHandler(svc, ui))
 	eng.Register(constants.HandlerBackOneOffPriority, backOneOffPriorityHandler(ui))
 	eng.Register(constants.HandlerAddActivity, addActivityHandler(svc, ui))
@@ -33,11 +35,31 @@ func RegisterTgamlHandlers(eng *tgamlengine.Engine, svc *service.Service, ui *Co
 	eng.Register(constants.HandlerSetActivityTimes, activityTimesHandler(svc, ui))
 	eng.Register(constants.HandlerSetActivityWindow, activityWindowHandler(svc, ui))
 	eng.Register(constants.HandlerUpdateMorning, updateMorningHandler(svc, ui))
+	eng.Register(constants.HandlerUpdateDayEnd, updateDayEndHandler(svc, ui))
 	eng.Register(constants.HandlerUpdateReminder, updateReminderHandler(svc, ui))
 	eng.Register(constants.HandlerUpdateTick, updateTickHandler(svc, ui))
 	eng.Register(constants.HandlerUpdateOneOffReminder, updateOneOffReminderHandler(svc, ui))
 	eng.Register(constants.HandlerOneOffTitle, oneOffTitleHandler(ui))
 	eng.Register(constants.HandlerOneOffItems, oneOffItemsHandler(svc, ui))
+	eng.Register(constants.HandlerOneOffNoItems, oneOffNoItemsHandler(svc, ui))
+}
+
+func finishDayHandler(eng *tgamlengine.Engine, svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
+	return func(ctx context.Context, _ *bot.Bot, _ *models.Update, s *tgamlsession.Session) (string, error) {
+		user, err := svc.FindUserByTelegramID(ctx, s.UserID)
+		if err != nil {
+			ui.handleRegistrationRequired(ctx, s.ChatID, s.UserID)
+			return "", nil
+		}
+		if _, err := svc.FinishDay(ctx, user.ID, time.Now().UTC()); err != nil {
+			ui.showScreen(ctx, s.ChatID, tr("finish_day_error", err.Error()), ui.menuMarkup(s.UserID, s.ChatID))
+			return "", nil
+		}
+
+		_ = s.Transition(ctx, constants.SceneMenu)
+		ui.showScreen(ctx, s.ChatID, eng.T("messages.menu.day_finished"), ui.menuMarkup(s.UserID, s.ChatID))
+		return "", nil
+	}
 }
 
 func backActivityDetailHandler(svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
@@ -242,15 +264,15 @@ func activityWindowHandler(svc *service.Service, ui *Controller) tgamlengine.Han
 			return "", nil
 		}
 		page := sessionInt(s, constants.NSActivity, constants.KeyActivityPage)
-		var start, end string
+		var windows []domain.ReminderWindow
 		if strings.TrimSpace(u.Message.Text) != "-" {
-			start, end, err = parseWindowInput(u.Message.Text)
+			windows, err = parseWindowInput(u.Message.Text)
 			if err != nil {
 				ui.showScreen(ctx, s.ChatID, tr("activity_error_invalid_window"), nil)
 				return "", nil
 			}
 		}
-		if err := svc.SetActivityReminderWindow(ctx, user.ID, activityID, start, end); err != nil {
+		if err := svc.SetActivityReminderWindows(ctx, user.ID, activityID, windows); err != nil {
 			ui.showScreen(ctx, s.ChatID, tr("activity_error_window", err.Error()), nil)
 			return "", nil
 		}
@@ -268,12 +290,29 @@ func updateMorningHandler(svc *service.Service, ui *Controller) tgamlengine.Hand
 			ui.handleRegistrationRequired(ctx, s.ChatID, s.UserID)
 			return "", nil
 		}
-		if err := svc.UpdateSettings(ctx, user.ID, strings.TrimSpace(u.Message.Text), user.ReminderIntervalMinutes); err != nil {
+		if err := svc.UpdateSettings(ctx, user.ID, strings.TrimSpace(u.Message.Text), user.DayEndTime, user.ReminderIntervalMinutes); err != nil {
 			ui.showScreen(ctx, s.ChatID, tr("settings_error_update_morning", err.Error()), nil)
 			return "", nil
 		}
 		_ = s.Transition(ctx, constants.SceneMenu)
 		ui.showSettings(ctx, s.ChatID, s.UserID, tr("settings_success_morning"))
+		return "", nil
+	}
+}
+
+func updateDayEndHandler(svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
+	return func(ctx context.Context, _ *bot.Bot, u *models.Update, s *tgamlsession.Session) (string, error) {
+		user, err := svc.FindUserByTelegramID(ctx, s.UserID)
+		if err != nil {
+			ui.handleRegistrationRequired(ctx, s.ChatID, s.UserID)
+			return "", nil
+		}
+		if err := svc.UpdateSettings(ctx, user.ID, user.MorningTime, strings.TrimSpace(u.Message.Text), user.ReminderIntervalMinutes); err != nil {
+			ui.showScreen(ctx, s.ChatID, tr("settings_error_update_day_end", err.Error()), nil)
+			return "", nil
+		}
+		_ = s.Transition(ctx, constants.SceneMenu)
+		ui.showSettings(ctx, s.ChatID, s.UserID, tr("settings_success_day_end"))
 		return "", nil
 	}
 }
@@ -290,7 +329,7 @@ func updateReminderHandler(svc *service.Service, ui *Controller) tgamlengine.Han
 			ui.showScreen(ctx, s.ChatID, tr("settings_error_invalid_minutes"), nil)
 			return "", nil
 		}
-		if err := svc.UpdateSettings(ctx, user.ID, user.MorningTime, minutes); err != nil {
+		if err := svc.UpdateSettings(ctx, user.ID, user.MorningTime, user.DayEndTime, minutes); err != nil {
 			ui.showScreen(ctx, s.ChatID, tr("settings_error_update_interval", err.Error()), nil)
 			return "", nil
 		}
@@ -364,22 +403,32 @@ func oneOffTitleHandler(ui *Controller) tgamlengine.HandlerFunc {
 
 func oneOffItemsHandler(svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
 	return func(ctx context.Context, _ *bot.Bot, u *models.Update, s *tgamlsession.Session) (string, error) {
-		user, err := svc.FindUserByTelegramID(ctx, s.UserID)
-		if err != nil {
-			ui.handleRegistrationRequired(ctx, s.ChatID, s.UserID)
-			return "", nil
-		}
-		priority := domain.OneOffTaskPriority(s.GetStr(constants.NSOneOff, constants.KeyPriority))
-		task, err := svc.CreateOneOffTask(ctx, user.ID, s.GetStr(constants.NSOneOff, constants.KeyTaskTitle), priority, parseOneOffChecklistInput(u.Message.Text))
-		if err != nil {
-			ui.showScreen(ctx, s.ChatID, tr("oneoff_error_create", err.Error()), nil)
-			return "", nil
-		}
-		_ = s.ClearNamespace(constants.NSOneOff)
-		_ = s.Transition(ctx, constants.SceneMenu)
-		ui.showOneOffTasks(ctx, s.ChatID, user.ID, tr("oneoff_success_create", task.Title))
+		return createOneOffTaskWithChecklist(ctx, svc, ui, s, parseOneOffChecklistInput(u.Message.Text))
+	}
+}
+
+func oneOffNoItemsHandler(svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
+	return func(ctx context.Context, _ *bot.Bot, _ *models.Update, s *tgamlsession.Session) (string, error) {
+		return createOneOffTaskWithChecklist(ctx, svc, ui, s, nil)
+	}
+}
+
+func createOneOffTaskWithChecklist(ctx context.Context, svc *service.Service, ui *Controller, s *tgamlsession.Session, checklist []string) (string, error) {
+	user, err := svc.FindUserByTelegramID(ctx, s.UserID)
+	if err != nil {
+		ui.handleRegistrationRequired(ctx, s.ChatID, s.UserID)
 		return "", nil
 	}
+	priority := domain.OneOffTaskPriority(s.GetStr(constants.NSOneOff, constants.KeyPriority))
+	task, err := svc.CreateOneOffTask(ctx, user.ID, s.GetStr(constants.NSOneOff, constants.KeyTaskTitle), priority, checklist)
+	if err != nil {
+		ui.showScreen(ctx, s.ChatID, tr("oneoff_error_create", err.Error()), nil)
+		return "", nil
+	}
+	_ = s.ClearNamespace(constants.NSOneOff)
+	_ = s.Transition(ctx, constants.SceneMenu)
+	ui.showOneOffTasks(ctx, s.ChatID, user.ID, tr("oneoff_success_create", task.Title))
+	return "", nil
 }
 
 func transitionAndRenderScene(ctx context.Context, b *bot.Bot, eng *tgamlengine.Engine, s *tgamlsession.Session, sceneID string) (string, error) {

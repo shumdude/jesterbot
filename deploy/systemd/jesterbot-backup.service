@@ -1,0 +1,16 @@
+# One-shot unit for SQLite backups with retention cleanup.
+# Entry point is deploy/systemd/jesterbot-backup.sh.
+# Triggered by jesterbot-backup.timer; keep independent from jesterbot.service.
+#
+[Unit]
+Description=Jesterbot SQLite backup job
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jesterbot
+Group=jesterbot
+WorkingDirectory=/opt/jesterbot
+EnvironmentFile=-/opt/jesterbot/.env
+ExecStart=/bin/bash /opt/jesterbot/deploy/systemd/jesterbot-backup.sh

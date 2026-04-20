@@ -76,6 +76,8 @@ go test ./...
 
 Detailed deployment instructions live in [md-files/DEPLOY.md](md-files/DEPLOY.md).
 
+Production note: the bot is already used in production. Do not change DB schema directly; any schema change must go through a new forward migration.
+
 ### Docker
 
 Build and run:

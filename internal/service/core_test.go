@@ -33,6 +33,9 @@ func TestRegisterUserValidatesAndNormalizes(t *testing.T) {
 	if user.MorningTime != "08:15" {
 		t.Fatalf("unexpected morning time: %s", user.MorningTime)
 	}
+	if user.DayEndTime != "00:00" {
+		t.Fatalf("unexpected day end time: %s", user.DayEndTime)
+	}
 }
 
 func TestReminderCycleAvoidsRepeatsBeforeReset(t *testing.T) {
@@ -101,6 +104,74 @@ func TestMarkDoneCompletesPlan(t *testing.T) {
 	}
 	if plan.CompletedAt == nil {
 		t.Fatal("expected completion timestamp")
+	}
+}
+
+func TestMarkDoneKeepsScheduledReminderWhenStillInFuture(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	svc.rng.Seed(1)
+
+	user := seedUser(repo)
+	activities := seedActivities(repo, user.ID, "Stretch", "Read")
+
+	startedAt := time.Date(2026, 4, 6, 5, 0, 0, 0, time.UTC)
+	if _, err := svc.StartMorningPlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("start morning plan: %v", err)
+	}
+	if _, err := svc.FinalizePlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("finalize plan: %v", err)
+	}
+
+	doneAt := startedAt.Add(10 * time.Minute)
+	plan, err := svc.MarkActivityDone(context.Background(), user.ID, activities[0].ID, doneAt)
+	if err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+
+	expectedFirstTick := startedAt.Add(30 * time.Minute)
+	if plan.NextReminderAt == nil || !plan.NextReminderAt.Equal(expectedFirstTick) {
+		t.Fatalf("next reminder moved unexpectedly: got %v want %v", plan.NextReminderAt, expectedFirstTick)
+	}
+
+	item, updatedPlan, err := svc.PickReminder(context.Background(), user.ID, expectedFirstTick)
+	if err != nil {
+		t.Fatalf("pick reminder on scheduled tick: %v", err)
+	}
+	if item == nil || item.ActivityID != activities[1].ID {
+		t.Fatalf("expected reminder for remaining activity %d, got %+v", activities[1].ID, item)
+	}
+
+	expectedNextTick := expectedFirstTick.Add(30 * time.Minute)
+	if updatedPlan.NextReminderAt == nil || !updatedPlan.NextReminderAt.Equal(expectedNextTick) {
+		t.Fatalf("unexpected next reminder after tick: got %v want %v", updatedPlan.NextReminderAt, expectedNextTick)
+	}
+}
+
+func TestMarkDoneReschedulesReminderWhenOverdue(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+
+	user := seedUser(repo)
+	activities := seedActivities(repo, user.ID, "Stretch", "Read")
+
+	startedAt := time.Date(2026, 4, 6, 5, 0, 0, 0, time.UTC)
+	if _, err := svc.StartMorningPlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("start morning plan: %v", err)
+	}
+	if _, err := svc.FinalizePlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("finalize plan: %v", err)
+	}
+
+	doneAt := startedAt.Add(40 * time.Minute)
+	plan, err := svc.MarkActivityDone(context.Background(), user.ID, activities[0].ID, doneAt)
+	if err != nil {
+		t.Fatalf("mark done overdue: %v", err)
+	}
+
+	expectedRescheduled := doneAt.Add(30 * time.Minute)
+	if plan.NextReminderAt == nil || !plan.NextReminderAt.Equal(expectedRescheduled) {
+		t.Fatalf("unexpected overdue reminder reschedule: got %v want %v", plan.NextReminderAt, expectedRescheduled)
 	}
 }
 
@@ -196,7 +267,7 @@ func TestUpdateSettingsReschedulesActivePlanReminder(t *testing.T) {
 
 	updatedAt := startedAt.Add(5 * time.Minute)
 	svc.now = func() time.Time { return updatedAt }
-	if err := svc.UpdateSettings(context.Background(), user.ID, user.MorningTime, 10); err != nil {
+	if err := svc.UpdateSettings(context.Background(), user.ID, user.MorningTime, user.DayEndTime, 10); err != nil {
 		t.Fatalf("update settings: %v", err)
 	}
 
@@ -214,6 +285,162 @@ func TestUpdateSettingsReschedulesActivePlanReminder(t *testing.T) {
 	}
 }
 
+func TestSetActivityTimesPerDayReopensCompletedPlanForCurrentLogicalDay(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+
+	user := seedUser(repo)
+	activities := seedActivities(repo, user.ID, "Stretch")
+
+	startedAt := time.Date(2026, 4, 6, 5, 0, 0, 0, time.UTC)
+	if _, err := svc.StartMorningPlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("start morning plan: %v", err)
+	}
+	if _, err := svc.FinalizePlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("finalize plan: %v", err)
+	}
+	if _, err := svc.MarkActivityDone(context.Background(), user.ID, activities[0].ID, startedAt.Add(5*time.Minute)); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+
+	updatedAt := startedAt.Add(10 * time.Minute)
+	svc.now = func() time.Time { return updatedAt }
+	if err := svc.SetActivityTimesPerDay(context.Background(), user.ID, activities[0].ID, 2); err != nil {
+		t.Fatalf("set times per day: %v", err)
+	}
+
+	plan, err := svc.GetTodayPlan(context.Background(), user.ID, updatedAt)
+	if err != nil {
+		t.Fatalf("get today plan: %v", err)
+	}
+
+	if plan.Status != domain.PlanStatusActive {
+		t.Fatalf("expected active plan after target increase, got %s", plan.Status)
+	}
+	if plan.CompletedAt != nil {
+		t.Fatalf("expected completed_at to be cleared, got %v", plan.CompletedAt)
+	}
+	expectedNextReminder := updatedAt.Add(30 * time.Minute)
+	if plan.NextReminderAt == nil || !plan.NextReminderAt.Equal(expectedNextReminder) {
+		t.Fatalf("unexpected next reminder: got %v want %v", plan.NextReminderAt, expectedNextReminder)
+	}
+
+	item := plan.Items[0]
+	if item.TimesPerDay != 2 {
+		t.Fatalf("unexpected item times per day: %d", item.TimesPerDay)
+	}
+	if item.Completed {
+		t.Fatal("expected item to become not completed after target increase")
+	}
+	if item.CompletedAt != nil {
+		t.Fatalf("expected item completed_at to be cleared, got %v", item.CompletedAt)
+	}
+	if item.CompletedCount != 1 {
+		t.Fatalf("unexpected completed count: %d", item.CompletedCount)
+	}
+}
+
+func TestSetActivityTimesPerDayCompletesActivePlanForCurrentLogicalDay(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+
+	user := seedUser(repo)
+	activities := seedActivities(repo, user.ID, "Stretch")
+	if err := svc.SetActivityTimesPerDay(context.Background(), user.ID, activities[0].ID, 2); err != nil {
+		t.Fatalf("set initial times per day: %v", err)
+	}
+
+	startedAt := time.Date(2026, 4, 6, 5, 0, 0, 0, time.UTC)
+	if _, err := svc.StartMorningPlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("start morning plan: %v", err)
+	}
+	if _, err := svc.FinalizePlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("finalize plan: %v", err)
+	}
+	if _, err := svc.MarkActivityDone(context.Background(), user.ID, activities[0].ID, startedAt.Add(5*time.Minute)); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+
+	updatedAt := startedAt.Add(10 * time.Minute)
+	svc.now = func() time.Time { return updatedAt }
+	if err := svc.SetActivityTimesPerDay(context.Background(), user.ID, activities[0].ID, 1); err != nil {
+		t.Fatalf("set times per day: %v", err)
+	}
+
+	plan, err := svc.GetTodayPlan(context.Background(), user.ID, updatedAt)
+	if err != nil {
+		t.Fatalf("get today plan: %v", err)
+	}
+
+	if plan.Status != domain.PlanStatusCompleted {
+		t.Fatalf("expected completed plan after target decrease, got %s", plan.Status)
+	}
+	if plan.CompletedAt == nil || !plan.CompletedAt.Equal(updatedAt) {
+		t.Fatalf("expected completed_at=%v, got %v", updatedAt, plan.CompletedAt)
+	}
+	if plan.NextReminderAt != nil {
+		t.Fatalf("expected no next reminder for completed plan, got %v", plan.NextReminderAt)
+	}
+
+	item := plan.Items[0]
+	if item.TimesPerDay != 1 {
+		t.Fatalf("unexpected item times per day: %d", item.TimesPerDay)
+	}
+	if !item.Completed {
+		t.Fatal("expected item to become completed after target decrease")
+	}
+	if item.CompletedAt == nil || !item.CompletedAt.Equal(updatedAt) {
+		t.Fatalf("expected item completed_at=%v, got %v", updatedAt, item.CompletedAt)
+	}
+	if item.CompletedCount != 1 {
+		t.Fatalf("unexpected completed count: %d", item.CompletedCount)
+	}
+}
+
+func TestSetActivityTimesPerDayUsesLogicalDayBoundary(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+
+	user := seedUser(repo)
+	user.DayEndTime = "03:00"
+	repo.users[user.ID] = user
+	activities := seedActivities(repo, user.ID, "Stretch")
+
+	planTime := time.Date(2026, 4, 6, 1, 0, 0, 0, time.UTC) // logical day is 2026-04-05
+	if _, err := svc.StartMorningPlan(context.Background(), user.ID, planTime); err != nil {
+		t.Fatalf("start morning plan: %v", err)
+	}
+	if _, err := svc.FinalizePlan(context.Background(), user.ID, planTime); err != nil {
+		t.Fatalf("finalize plan: %v", err)
+	}
+	if _, err := svc.MarkActivityDone(context.Background(), user.ID, activities[0].ID, planTime.Add(5*time.Minute)); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+
+	updatedAt := time.Date(2026, 4, 6, 1, 30, 0, 0, time.UTC) // still logical day 2026-04-05
+	svc.now = func() time.Time { return updatedAt }
+	if err := svc.SetActivityTimesPerDay(context.Background(), user.ID, activities[0].ID, 2); err != nil {
+		t.Fatalf("set times per day: %v", err)
+	}
+
+	plan, err := svc.GetTodayPlan(context.Background(), user.ID, updatedAt)
+	if err != nil {
+		t.Fatalf("get today plan: %v", err)
+	}
+	if plan.DayLocal != "2026-04-05" {
+		t.Fatalf("unexpected logical day: %s", plan.DayLocal)
+	}
+	if plan.Status != domain.PlanStatusActive {
+		t.Fatalf("expected active plan after target increase within same logical day, got %s", plan.Status)
+	}
+	if plan.Items[0].TimesPerDay != 2 {
+		t.Fatalf("unexpected item times per day: %d", plan.Items[0].TimesPerDay)
+	}
+	if plan.Items[0].Completed {
+		t.Fatal("expected item to be not completed after target increase")
+	}
+}
+
 func TestPickReminderRespectsTimeWindow(t *testing.T) {
 	repo := newMemoryRepo()
 	svc := New(repo, 30)
@@ -222,7 +449,9 @@ func TestPickReminderRespectsTimeWindow(t *testing.T) {
 	activities := seedActivities(repo, user.ID, "Morning activity", "Unrestricted")
 
 	// Restrict first activity to morning window 08:00-10:00.
-	if err := repo.UpdateActivityReminderWindow(context.Background(), user.ID, activities[0].ID, "08:00", "10:00"); err != nil {
+	if err := repo.UpdateActivityReminderWindows(context.Background(), user.ID, activities[0].ID, []domain.ReminderWindow{
+		{Start: "08:00", End: "10:00"},
+	}); err != nil {
 		t.Fatalf("set window: %v", err)
 	}
 
@@ -252,33 +481,179 @@ func TestPickReminderRespectsTimeWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pick reminder at 08:31: %v", err)
 	}
-	// "Morning activity" window is now open so both are eligible; just assert we get something.
-	if item2 == nil {
-		t.Fatal("expected a reminder item at 08:31")
+	// "Morning activity" window is now open, so windowed activities have priority over unrestricted ones.
+	if item2.ActivityID != activities[0].ID {
+		t.Fatalf("expected windowed activity, got activity_id=%d", item2.ActivityID)
 	}
 }
 
 func TestIsInReminderWindow(t *testing.T) {
 	tests := []struct {
-		start, end, clock string
-		want              bool
+		windows []domain.ReminderWindow
+		clock   string
+		want    bool
 	}{
-		{"", "", "10:00", true},       // no restriction
-		{"09:00", "21:00", "09:00", true},  // exactly at start
-		{"09:00", "21:00", "20:59", true},  // just before end
-		{"09:00", "21:00", "21:00", false}, // at end (exclusive)
-		{"09:00", "21:00", "08:59", false}, // before start
-		{"22:00", "06:00", "23:00", true},  // midnight-crossing, in evening part
-		{"22:00", "06:00", "05:59", true},  // midnight-crossing, in morning part
-		{"22:00", "06:00", "06:00", false}, // midnight-crossing, at end (exclusive)
-		{"22:00", "06:00", "10:00", false}, // midnight-crossing, outside
+		{nil, "10:00", true}, // no restriction
+		{[]domain.ReminderWindow{{Start: "09:00", End: "21:00"}}, "09:00", true},
+		{[]domain.ReminderWindow{{Start: "09:00", End: "21:00"}}, "20:59", true},
+		{[]domain.ReminderWindow{{Start: "09:00", End: "21:00"}}, "21:00", false},
+		{[]domain.ReminderWindow{{Start: "09:00", End: "21:00"}}, "08:59", false},
+		{[]domain.ReminderWindow{{Start: "22:00", End: "06:00"}}, "23:00", true},
+		{[]domain.ReminderWindow{{Start: "22:00", End: "06:00"}}, "05:59", true},
+		{[]domain.ReminderWindow{{Start: "22:00", End: "06:00"}}, "06:00", false},
+		{[]domain.ReminderWindow{{Start: "22:00", End: "06:00"}}, "10:00", false},
+		{
+			windows: []domain.ReminderWindow{
+				{Start: "08:00", End: "10:00"},
+				{Start: "14:00", End: "16:00"},
+			},
+			clock: "14:30",
+			want:  true,
+		},
+		{
+			windows: []domain.ReminderWindow{
+				{Start: "22:00", End: "01:00"},
+				{Start: "04:00", End: "06:00"},
+			},
+			clock: "00:30",
+			want:  true,
+		},
+		{
+			windows: []domain.ReminderWindow{
+				{Start: "22:00", End: "01:00"},
+				{Start: "04:00", End: "06:00"},
+			},
+			clock: "03:00",
+			want:  false,
+		},
 	}
 	for _, tt := range tests {
-		act := domain.Activity{ReminderWindowStart: tt.start, ReminderWindowEnd: tt.end}
+		act := domain.Activity{ReminderWindows: tt.windows}
 		got := isInReminderWindow(act, tt.clock)
 		if got != tt.want {
-			t.Errorf("isInReminderWindow(%q, %q, %q) = %v, want %v", tt.start, tt.end, tt.clock, got, tt.want)
+			t.Errorf("isInReminderWindow(%+v, %q) = %v, want %v", tt.windows, tt.clock, got, tt.want)
 		}
+	}
+}
+
+func TestLocalDayUsesConfiguredDayEnd(t *testing.T) {
+	tests := []struct {
+		name      string
+		now       time.Time
+		offsetMin int
+		dayEnd    string
+		wantDay   string
+	}{
+		{
+			name:      "default day end at midnight keeps current day",
+			now:       time.Date(2026, 4, 6, 0, 30, 0, 0, time.UTC),
+			offsetMin: 0,
+			dayEnd:    "00:00",
+			wantDay:   "2026-04-06",
+		},
+		{
+			name:      "before day end belongs to previous day",
+			now:       time.Date(2026, 4, 6, 1, 59, 0, 0, time.UTC),
+			offsetMin: 0,
+			dayEnd:    "02:00",
+			wantDay:   "2026-04-05",
+		},
+		{
+			name:      "at day end switches to current day",
+			now:       time.Date(2026, 4, 6, 2, 0, 0, 0, time.UTC),
+			offsetMin: 0,
+			dayEnd:    "02:00",
+			wantDay:   "2026-04-06",
+		},
+		{
+			name:      "applies user utc offset before day end check",
+			now:       time.Date(2026, 4, 5, 23, 30, 0, 0, time.UTC), // local 02:30 at UTC+03
+			offsetMin: 180,
+			dayEnd:    "03:00",
+			wantDay:   "2026-04-05",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := localDay(tt.now, tt.offsetMin, tt.dayEnd)
+			if got != tt.wantDay {
+				t.Fatalf("localDay() = %s, want %s", got, tt.wantDay)
+			}
+		})
+	}
+}
+
+func TestFinishDayPausesNotificationsUntilNextLogicalDay(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	user := seedUser(repo)
+
+	user.DayEndTime = "03:00"
+	user.UTCOffsetMinutes = 180
+	repo.users[user.ID] = user
+
+	now := time.Date(2026, 4, 6, 21, 30, 0, 0, time.UTC) // local 2026-04-07 00:30
+	pausedUntil, err := svc.FinishDay(context.Background(), user.ID, now)
+	if err != nil {
+		t.Fatalf("finish day: %v", err)
+	}
+
+	want := time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC) // local 03:00
+	if !pausedUntil.Equal(want) {
+		t.Fatalf("unexpected pause until: got %v want %v", pausedUntil, want)
+	}
+
+	updatedUser, err := repo.GetUserByID(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("get user by id: %v", err)
+	}
+	if updatedUser.NotificationsPausedUntil == nil || !updatedUser.NotificationsPausedUntil.Equal(want) {
+		t.Fatalf("unexpected stored pause until: %v", updatedUser.NotificationsPausedUntil)
+	}
+}
+
+func TestNextLogicalDayStartUTC(t *testing.T) {
+	tests := []struct {
+		name      string
+		now       time.Time
+		offsetMin int
+		dayEnd    string
+		want      time.Time
+	}{
+		{
+			name:      "before day end points to same local date boundary",
+			now:       time.Date(2026, 4, 6, 1, 59, 0, 0, time.UTC),
+			offsetMin: 0,
+			dayEnd:    "02:00",
+			want:      time.Date(2026, 4, 6, 2, 0, 0, 0, time.UTC),
+		},
+		{
+			name:      "at day end points to next day boundary",
+			now:       time.Date(2026, 4, 6, 2, 0, 0, 0, time.UTC),
+			offsetMin: 0,
+			dayEnd:    "02:00",
+			want:      time.Date(2026, 4, 7, 2, 0, 0, 0, time.UTC),
+		},
+		{
+			name:      "respects positive utc offset",
+			now:       time.Date(2026, 4, 6, 21, 30, 0, 0, time.UTC), // local 00:30
+			offsetMin: 180,
+			dayEnd:    "03:00",
+			want:      time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC), // local 03:00
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := nextLogicalDayStartUTC(tt.now, tt.offsetMin, tt.dayEnd)
+			if err != nil {
+				t.Fatalf("nextLogicalDayStartUTC() error: %v", err)
+			}
+			if !got.Equal(tt.want) {
+				t.Fatalf("nextLogicalDayStartUTC() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -295,6 +670,7 @@ type memoryRepo struct {
 	oneOffTasks            map[int64]map[int64]domain.OneOffTask
 	oneOffReminderSettings map[int64]domain.OneOffReminderSettings
 	userTickIntervals      map[int64]int
+	reminderMessages       map[int64]map[int]domain.ReminderMessage
 }
 
 func newMemoryRepo() *memoryRepo {
@@ -306,6 +682,7 @@ func newMemoryRepo() *memoryRepo {
 		oneOffTasks:            make(map[int64]map[int64]domain.OneOffTask),
 		oneOffReminderSettings: make(map[int64]domain.OneOffReminderSettings),
 		userTickIntervals:      make(map[int64]int),
+		reminderMessages:       make(map[int64]map[int]domain.ReminderMessage),
 	}
 }
 
@@ -342,13 +719,24 @@ func (m *memoryRepo) CreateUser(_ context.Context, user *domain.User) error {
 	return nil
 }
 
-func (m *memoryRepo) UpdateUserSettings(_ context.Context, userID int64, morningTime string, reminderIntervalMinutes int) error {
+func (m *memoryRepo) UpdateUserSettings(_ context.Context, userID int64, morningTime, dayEndTime string, reminderIntervalMinutes int) error {
 	user, ok := m.users[userID]
 	if !ok {
 		return domain.ErrNotFound
 	}
 	user.MorningTime = morningTime
+	user.DayEndTime = dayEndTime
 	user.ReminderIntervalMinutes = reminderIntervalMinutes
+	m.users[userID] = user
+	return nil
+}
+
+func (m *memoryRepo) UpdateUserNotificationsPausedUntil(_ context.Context, userID int64, pausedUntil *time.Time) error {
+	user, ok := m.users[userID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	user.NotificationsPausedUntil = pausedUntil
 	m.users[userID] = user
 	return nil
 }
@@ -384,12 +772,19 @@ func (m *memoryRepo) UpdateActivityTimesPerDay(_ context.Context, userID, activi
 	return domain.ErrNotFound
 }
 
-func (m *memoryRepo) UpdateActivityReminderWindow(_ context.Context, userID, activityID int64, windowStart, windowEnd string) error {
+func (m *memoryRepo) UpdateActivityReminderWindows(_ context.Context, userID, activityID int64, windows []domain.ReminderWindow) error {
 	activities := m.activities[userID]
 	for i := range activities {
 		if activities[i].ID == activityID {
-			activities[i].ReminderWindowStart = windowStart
-			activities[i].ReminderWindowEnd = windowEnd
+			if len(windows) == 0 {
+				activities[i].ReminderWindowStart = ""
+				activities[i].ReminderWindowEnd = ""
+				activities[i].ReminderWindows = nil
+			} else {
+				activities[i].ReminderWindowStart = windows[0].Start
+				activities[i].ReminderWindowEnd = windows[0].End
+				activities[i].ReminderWindows = append([]domain.ReminderWindow(nil), windows...)
+			}
 			m.activities[userID] = activities
 			return nil
 		}
@@ -452,6 +847,32 @@ func (m *memoryRepo) savePlan(plan *domain.DayPlan) error {
 	return nil
 }
 
+func (m *memoryRepo) SaveReminderMessage(_ context.Context, message *domain.ReminderMessage) error {
+	if m.reminderMessages[message.UserID] == nil {
+		m.reminderMessages[message.UserID] = make(map[int]domain.ReminderMessage)
+	}
+	m.reminderMessages[message.UserID][message.MessageID] = *message
+	return nil
+}
+
+func (m *memoryRepo) ListReminderMessagesBeforeDay(_ context.Context, userID int64, dayLocal string) ([]domain.ReminderMessage, error) {
+	userMessages := m.reminderMessages[userID]
+	messages := make([]domain.ReminderMessage, 0, len(userMessages))
+	for _, message := range userMessages {
+		if message.LogicalDay < dayLocal {
+			messages = append(messages, message)
+		}
+	}
+	return messages, nil
+}
+
+func (m *memoryRepo) DeleteReminderMessage(_ context.Context, userID int64, messageID int) error {
+	if m.reminderMessages[userID] != nil {
+		delete(m.reminderMessages[userID], messageID)
+	}
+	return nil
+}
+
 func seedUser(repo *memoryRepo) domain.User {
 	user := domain.User{
 		TelegramUserID:          1,
@@ -459,6 +880,7 @@ func seedUser(repo *memoryRepo) domain.User {
 		Name:                    "Alice",
 		UTCOffsetMinutes:        0,
 		MorningTime:             "08:00",
+		DayEndTime:              "00:00",
 		ReminderIntervalMinutes: 30,
 		CreatedAt:               time.Now().UTC(),
 		UpdatedAt:               time.Now().UTC(),

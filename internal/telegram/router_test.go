@@ -1,14 +1,26 @@
 package telegram
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	tgamlengine "github.com/shumdude/tgaml/pkg/engine"
 
+	"jesterbot/cmd/jesterbot/botconfig"
 	"jesterbot/internal/domain"
+	"jesterbot/internal/service"
+	"jesterbot/internal/telegram/constants"
+	"jesterbot/internal/telegram/session_backend"
 )
 
 func TestBuildActivitiesKeyboardAddsBackButton(t *testing.T) {
@@ -80,6 +92,56 @@ func TestBuildActivityDetailKeyboardUsesPageAwareCallbacks(t *testing.T) {
 	}
 }
 
+func TestBuildActivityTimesKeyboardUsesDraftCallbacks(t *testing.T) {
+	markup := buildActivityTimesKeyboard(42, 2, 1)
+	inline, ok := markup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", markup)
+	}
+
+	if inline.InlineKeyboard[0][0].CallbackData != "activity:times:set:42:2:1" {
+		t.Fatalf("expected clamped decrease callback, got %+v", inline.InlineKeyboard[0][0])
+	}
+	if inline.InlineKeyboard[0][1].CallbackData != "activity:times:set:42:2:2" {
+		t.Fatalf("expected increase callback, got %+v", inline.InlineKeyboard[0][1])
+	}
+	if inline.InlineKeyboard[1][0].CallbackData != "activity:times:confirm:42:2:1" {
+		t.Fatalf("expected confirm callback, got %+v", inline.InlineKeyboard[1][0])
+	}
+	if inline.InlineKeyboard[2][0].CallbackData != "activity:open:42:2" {
+		t.Fatalf("expected back to activity callback, got %+v", inline.InlineKeyboard[2][0])
+	}
+	if inline.InlineKeyboard[3][0].CallbackData != "menu:back" {
+		t.Fatalf("expected main menu callback, got %+v", inline.InlineKeyboard[3][0])
+	}
+}
+
+func TestActivitiesTextPageShowsTimesPerDayInList(t *testing.T) {
+	text := activitiesTextPage([]domain.Activity{
+		{ID: 1, Title: "Read", TimesPerDay: 3},
+		{ID: 2, Title: "Walk", TimesPerDay: 0},
+	}, 0, defaultInlinePageSize)
+
+	if !strings.Contains(text, "1. Read (3x)") {
+		t.Fatalf("expected first activity count in list text, got %q", text)
+	}
+	if !strings.Contains(text, "2. Walk (1x)") {
+		t.Fatalf("expected clamped activity count in list text, got %q", text)
+	}
+}
+
+func TestActivityDetailTextShowsTimesInTextBlock(t *testing.T) {
+	text := activityDetailText("Prefix", domain.Activity{
+		ID:          1,
+		Title:       "Read",
+		TimesPerDay: 0,
+	})
+
+	if !strings.Contains(text, "Количество в день: 1x") {
+		t.Fatalf("expected times-per-day in detail text, got %q", text)
+	}
+}
+
 func TestTodayPlanErrorTextForNoActivities(t *testing.T) {
 	text := todayPlanErrorText(domain.ErrNoActivities)
 	if strings.Contains(text, domain.ErrNoActivities.Error()) {
@@ -145,6 +207,183 @@ func TestReminderTextShowsOnlyCurrentActivity(t *testing.T) {
 	if text != expected {
 		t.Fatalf("expected compact reminder text %q, got %q", expected, text)
 	}
+}
+
+func TestSendOneOffReminderSendsMessageWithoutReplyMarkup(t *testing.T) {
+	const (
+		token  = "test-token"
+		chatID = int64(456)
+	)
+
+	var (
+		receivedPayload     string
+		receivedReplyMarkup bool
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/bot" + token + "/getMe":
+			_, _ = rw.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"test","username":"test_bot"}}`))
+		case "/bot" + token + "/sendMessage":
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read sendMessage request body: %v", err)
+			}
+			if err := req.Body.Close(); err != nil {
+				t.Fatalf("close sendMessage request body: %v", err)
+			}
+			trimmed := strings.TrimSpace(string(body))
+			decoded, err := url.QueryUnescape(trimmed)
+			if err != nil {
+				t.Fatalf("decode sendMessage payload: %v", err)
+			}
+			receivedPayload = decoded
+			receivedReplyMarkup = strings.Contains(trimmed, "reply_markup") || strings.Contains(decoded, "reply_markup")
+			_, _ = rw.Write([]byte(`{"ok":true,"result":{"message_id":1,"date":0,"chat":{"id":456,"type":"private"}}}`))
+		default:
+			t.Fatalf("unexpected request path: %s", req.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	tgBot, err := bot.New(token, bot.WithServerURL(server.URL))
+	if err != nil {
+		t.Fatalf("create test telegram bot: %v", err)
+	}
+
+	controller := &Controller{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		bot:    tgBot,
+	}
+
+	task := &domain.OneOffTask{
+		ID:    11,
+		Title: "Pay bill",
+		Items: []domain.OneOffTaskItem{
+			{ID: 101, Title: "Open bank app"},
+		},
+	}
+	controller.SendOneOffReminder(context.Background(), 1, chatID, "2026-04-10", task)
+
+	if receivedReplyMarkup {
+		t.Fatal("expected one-off reminder message without reply_markup")
+	}
+	if !strings.Contains(receivedPayload, task.Title) {
+		t.Fatalf("expected reminder payload to mention task title, got %q", receivedPayload)
+	}
+}
+
+func TestOneOffNoItemsHandlerCreatesTaskWithoutChecklist(t *testing.T) {
+	const (
+		token          = "test-token"
+		telegramUserID = int64(777001)
+		chatID         = int64(9001)
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/bot" + token + "/getMe":
+			_, _ = rw.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"test","username":"test_bot"}}`))
+		case "/bot" + token + "/sendMessage":
+			_, _ = rw.Write([]byte(`{"ok":true,"result":{"message_id":1,"date":0,"chat":{"id":9001,"type":"private"}}}`))
+		default:
+			t.Fatalf("unexpected request path: %s", req.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	tgBot, err := bot.New(token, bot.WithServerURL(server.URL))
+	if err != nil {
+		t.Fatalf("create test telegram bot: %v", err)
+	}
+
+	cfg, err := botconfig.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	repo := &oneOffHandlerRepo{
+		menuMarkupRepo: menuMarkupRepo{
+			userByTelegramID: map[int64]*domain.User{
+				telegramUserID: {
+					ID:             42,
+					TelegramUserID: telegramUserID,
+					ChatID:         chatID,
+					Name:           "Alexey",
+				},
+			},
+		},
+	}
+	svc := service.New(repo, 30)
+	eng := tgamlengine.New(cfg, session_backend.New(constants.SceneMenu))
+
+	controller := &Controller{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		service: svc,
+		eng:     eng,
+		bot:     tgBot,
+	}
+
+	session := eng.NewSession(telegramUserID, chatID)
+	if err := session.SetStr(constants.NSOneOff, constants.KeyTaskTitle, "Pay bill"); err != nil {
+		t.Fatalf("set one-off title: %v", err)
+	}
+	if err := session.SetStr(constants.NSOneOff, constants.KeyPriority, string(domain.OneOffTaskPriorityHigh)); err != nil {
+		t.Fatalf("set one-off priority: %v", err)
+	}
+
+	if _, err := oneOffNoItemsHandler(svc, controller)(context.Background(), tgBot, nil, session); err != nil {
+		t.Fatalf("run no-items handler: %v", err)
+	}
+
+	if len(repo.tasks) != 1 {
+		t.Fatalf("expected exactly one created task, got %+v", repo.tasks)
+	}
+	if repo.tasks[0].Title != "Pay bill" {
+		t.Fatalf("expected task title to be preserved, got %+v", repo.tasks[0])
+	}
+	if len(repo.tasks[0].Items) != 0 {
+		t.Fatalf("expected task without checklist items, got %+v", repo.tasks[0].Items)
+	}
+}
+
+type oneOffHandlerRepo struct {
+	menuMarkupRepo
+	tasks                  []domain.OneOffTask
+	oneOffReminderSettings *domain.OneOffReminderSettings
+}
+
+func (r *oneOffHandlerRepo) GetOneOffReminderSettings(context.Context, int64) (*domain.OneOffReminderSettings, error) {
+	if r.oneOffReminderSettings == nil {
+		return nil, domain.ErrNotFound
+	}
+	return r.oneOffReminderSettings, nil
+}
+
+func (r *oneOffHandlerRepo) SaveOneOffReminderSettings(_ context.Context, settings *domain.OneOffReminderSettings) error {
+	copied := *settings
+	r.oneOffReminderSettings = &copied
+	return nil
+}
+
+func (r *oneOffHandlerRepo) ListOneOffTasks(context.Context, int64) ([]domain.OneOffTask, error) {
+	tasks := make([]domain.OneOffTask, len(r.tasks))
+	copy(tasks, r.tasks)
+	return tasks, nil
+}
+
+func (r *oneOffHandlerRepo) SaveOneOffTask(_ context.Context, task *domain.OneOffTask) error {
+	copied := *task
+	if copied.ID == 0 {
+		copied.ID = int64(len(r.tasks) + 1)
+	}
+	if len(copied.Items) > 0 {
+		items := make([]domain.OneOffTaskItem, len(copied.Items))
+		copy(items, copied.Items)
+		copied.Items = items
+	}
+	task.ID = copied.ID
+	r.tasks = append(r.tasks, copied)
+	return nil
 }
 
 func TestOneOffTasksTextAndKeyboardHideHistoryFromMenu(t *testing.T) {
@@ -245,6 +484,61 @@ func TestParseIDPageCallbackSupportsDoneButtons(t *testing.T) {
 	}
 }
 
+func TestParseActivityTimesCallbackParsesAndClampsTimes(t *testing.T) {
+	activityID, page, timesPerDay, err := parseActivityTimesCallback("activity:times:confirm:42:3:0", "confirm")
+	if err != nil {
+		t.Fatalf("expected activity times callback to parse, got %v", err)
+	}
+	if activityID != 42 {
+		t.Fatalf("expected activity id 42, got %d", activityID)
+	}
+	if page != 3 {
+		t.Fatalf("expected page 3, got %d", page)
+	}
+	if timesPerDay != 1 {
+		t.Fatalf("expected times per day to be clamped to 1, got %d", timesPerDay)
+	}
+}
+
+func TestParseWindowInputSupportsMultipleRanges(t *testing.T) {
+	windows, err := parseWindowInput("08:00-10:00, 14:00-16:00")
+	if err != nil {
+		t.Fatalf("expected comma-separated windows to parse, got %v", err)
+	}
+	if len(windows) != 2 {
+		t.Fatalf("expected 2 windows, got %+v", windows)
+	}
+	if windows[0].Start != "08:00" || windows[0].End != "10:00" {
+		t.Fatalf("unexpected first window: %+v", windows[0])
+	}
+	if windows[1].Start != "14:00" || windows[1].End != "16:00" {
+		t.Fatalf("unexpected second window: %+v", windows[1])
+	}
+
+	windows, err = parseWindowInput("22:00-01:00;\n04:00-06:00")
+	if err != nil {
+		t.Fatalf("expected semicolon/newline-separated windows to parse, got %v", err)
+	}
+	if len(windows) != 2 {
+		t.Fatalf("expected 2 windows with semicolon/newline, got %+v", windows)
+	}
+	if windows[0].Start != "22:00" || windows[0].End != "01:00" {
+		t.Fatalf("unexpected midnight-crossing window: %+v", windows[0])
+	}
+	if windows[1].Start != "04:00" || windows[1].End != "06:00" {
+		t.Fatalf("unexpected second window: %+v", windows[1])
+	}
+}
+
+func TestParseWindowInputRejectsInvalidRanges(t *testing.T) {
+	if _, err := parseWindowInput("09:00-09:00"); err == nil {
+		t.Fatal("expected equal start/end to fail")
+	}
+	if _, err := parseWindowInput("09:00-12:00, bad"); err == nil {
+		t.Fatal("expected invalid segment to fail")
+	}
+}
+
 func TestBuildProgressKeyboardAlwaysIncludesMainMenuBack(t *testing.T) {
 	markup := buildProgressKeyboard(&domain.DayPlan{
 		Items: []domain.DayPlanItem{
@@ -269,6 +563,25 @@ func TestBuildSettingsKeyboardIncludesMainMenuBack(t *testing.T) {
 	inline, ok := markup.(*models.InlineKeyboardMarkup)
 	if !ok {
 		t.Fatalf("expected inline keyboard, got %T", markup)
+	}
+
+	hasDayEnd := false
+	hasClearChat := false
+	for _, row := range inline.InlineKeyboard {
+		for _, button := range row {
+			if button.CallbackData == "settings:day_end" {
+				hasDayEnd = true
+			}
+			if button.CallbackData == "settings:clear_chat" {
+				hasClearChat = true
+			}
+		}
+	}
+	if !hasDayEnd {
+		t.Fatalf("expected day end settings button, got %+v", inline.InlineKeyboard)
+	}
+	if !hasClearChat {
+		t.Fatalf("expected clear chat settings button, got %+v", inline.InlineKeyboard)
 	}
 
 	lastRow := inline.InlineKeyboard[len(inline.InlineKeyboard)-1]
@@ -329,6 +642,7 @@ func TestBuildOneOffKeyboardsIncludeMainMenuBack(t *testing.T) {
 func TestSettingsTextShowsCurrentUserSettings(t *testing.T) {
 	text := settingsText(&domain.User{
 		MorningTime:             "08:30",
+		DayEndTime:              "02:00",
 		ReminderIntervalMinutes: 45,
 		UTCOffsetMinutes:        180,
 	}, 2, &domain.OneOffReminderSettings{
@@ -342,6 +656,9 @@ func TestSettingsTextShowsCurrentUserSettings(t *testing.T) {
 	}
 	if !strings.Contains(text, "UTC+03:00") {
 		t.Fatalf("expected timezone in settings text, got %q", text)
+	}
+	if !strings.Contains(text, "02:00") {
+		t.Fatalf("expected day end time in settings text, got %q", text)
 	}
 	if !strings.Contains(text, "Время утра: 08:30") {
 		t.Fatalf("expected morning time in settings text, got %q", text)
@@ -358,5 +675,65 @@ func TestTelegramHTTPClientTimeoutAddsSafetyBuffer(t *testing.T) {
 	got := telegramHTTPClientTimeout(10 * time.Second)
 	if got < time.Minute {
 		t.Fatalf("expected at least one minute timeout, got %s", got)
+	}
+}
+
+func TestParseOneOffReminderSettingsInputSupportsUnits(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		low    int
+		medium int
+		high   int
+	}{
+		{
+			name:   "plain minutes",
+			input:  "60,30,10",
+			low:    60,
+			medium: 30,
+			high:   10,
+		},
+		{
+			name:   "mixed day and hour units",
+			input:  "3d,1d,12h",
+			low:    3 * 24 * 60,
+			medium: 24 * 60,
+			high:   12 * 60,
+		},
+		{
+			name:   "mixed day and minute units with separators",
+			input:  " 3D ; 1d ; 30m ",
+			low:    3 * 24 * 60,
+			medium: 24 * 60,
+			high:   30,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			low, medium, high, err := parseOneOffReminderSettingsInput(tc.input)
+			if err != nil {
+				t.Fatalf("parse one-off reminder settings: %v", err)
+			}
+			if low != tc.low || medium != tc.medium || high != tc.high {
+				t.Fatalf("unexpected parsed values: got (%d,%d,%d), want (%d,%d,%d)", low, medium, high, tc.low, tc.medium, tc.high)
+			}
+		})
+	}
+}
+
+func TestParseOneOffReminderSettingsInputRejectsInvalidValues(t *testing.T) {
+	inputs := []string{
+		"3d,1d",
+		"3w,1d,30m",
+		"d,1d,30m",
+		"3d,0,10m",
+	}
+
+	for _, input := range inputs {
+		if _, _, _, err := parseOneOffReminderSettingsInput(input); err == nil {
+			t.Fatalf("expected parsing to fail for %q", input)
+		}
 	}
 }

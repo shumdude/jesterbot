@@ -46,6 +46,30 @@ func buildActivityDetailKeyboard(activity domain.Activity, page int) models.Repl
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
+func buildActivityTimesKeyboard(activityID int64, page, timesPerDay int) models.ReplyMarkup {
+	if timesPerDay < 1 {
+		timesPerDay = 1
+	}
+
+	decreased := timesPerDay - 1
+	if decreased < 1 {
+		decreased = 1
+	}
+	increased := timesPerDay + 1
+
+	rows := [][]models.InlineKeyboardButton{
+		{
+			{Text: tr("button_activity_times_decrease"), CallbackData: fmt.Sprintf("activity:times:set:%d:%d:%d", activityID, page, decreased)},
+			{Text: tr("button_activity_times_increase"), CallbackData: fmt.Sprintf("activity:times:set:%d:%d:%d", activityID, page, increased)},
+		},
+		{{Text: tr("button_activity_times_confirm"), CallbackData: fmt.Sprintf("activity:times:confirm:%d:%d:%d", activityID, page, timesPerDay)}},
+		{{Text: tr("button_back"), CallbackData: fmt.Sprintf("activity:open:%d:%d", activityID, page)}},
+		mainMenuBackRow(),
+	}
+
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
 func buildPlanSelectionKeyboard(plan *domain.DayPlan) models.ReplyMarkup {
 	return buildPlanSelectionKeyboardPage(plan, 0, defaultInlinePageSize)
 }
@@ -117,9 +141,11 @@ func buildSettingsKeyboard() models.ReplyMarkup {
 	return &models.InlineKeyboardMarkup{
 		InlineKeyboard: [][]models.InlineKeyboardButton{
 			{{Text: tr("button_settings_morning"), CallbackData: "settings:morning"}},
+			{{Text: tr("button_settings_day_end"), CallbackData: "settings:day_end"}},
 			{{Text: tr("button_settings_interval"), CallbackData: "settings:interval"}},
 			{{Text: tr("button_settings_tick"), CallbackData: "settings:tick"}},
 			{{Text: tr("button_settings_oneoff"), CallbackData: "settings:oneoff"}},
+			{{Text: tr("button_settings_clear_chat"), CallbackData: "settings:clear_chat"}},
 			mainMenuBackRow(),
 		},
 	}
@@ -235,8 +261,9 @@ func mainMenuBackRow() []models.InlineKeyboardButton {
 }
 
 func activityWindowButton(a domain.Activity) string {
-	if a.ReminderWindowStart == "" || a.ReminderWindowEnd == "" {
+	window := formatActivityReminderWindows(a)
+	if window == tr("activity_window_none") {
 		return tr("button_activity_window_none")
 	}
-	return tr("button_activity_window", a.ReminderWindowStart, a.ReminderWindowEnd)
+	return tr("button_activity_window", window)
 }

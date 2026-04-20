@@ -151,3 +151,33 @@ func parseTwoIDsPageCallback(data string) (int64, int64, int, error) {
 
 	return firstID, secondID, page, nil
 }
+
+func parseActivityTimesCallback(data, action string) (int64, int, int, error) {
+	parts := strings.Split(data, ":")
+	if len(parts) != 6 || parts[0] != "activity" || parts[1] != "times" || parts[2] != action {
+		return 0, 0, 0, fmt.Errorf("invalid activity times callback: %s", data)
+	}
+
+	activityID, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse activity id: %w", err)
+	}
+
+	page, err := strconv.Atoi(parts[4])
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse activity page: %w", err)
+	}
+	if page < 0 {
+		return 0, 0, 0, fmt.Errorf("negative activity page: %s", data)
+	}
+
+	timesPerDay, err := strconv.Atoi(parts[5])
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse activity times: %w", err)
+	}
+	if timesPerDay < 1 {
+		timesPerDay = 1
+	}
+
+	return activityID, page, timesPerDay, nil
+}

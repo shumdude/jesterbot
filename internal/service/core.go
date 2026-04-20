@@ -27,6 +27,8 @@ type Service struct {
 	now                    func() time.Time
 }
 
+const defaultDayEndTime = "00:00"
+
 func New(repo Repository, defaultReminderMinutes int) *Service {
 	return &Service{
 		repo:                   repo,
@@ -65,6 +67,7 @@ func (s *Service) RegisterUser(ctx context.Context, input RegistrationInput) (*d
 		Name:                    name,
 		UTCOffsetMinutes:        offsetMinutes,
 		MorningTime:             morningTime,
+		DayEndTime:              defaultDayEndTime,
 		ReminderIntervalMinutes: s.defaultReminderMinutes,
 		CreatedAt:               now,
 		UpdatedAt:               now,
@@ -81,12 +84,33 @@ func (s *Service) FindUserByTelegramID(ctx context.Context, telegramUserID int64
 	return s.repo.GetUserByTelegramID(ctx, telegramUserID)
 }
 
+func (s *Service) FinishDay(ctx context.Context, userID int64, now time.Time) (time.Time, error) {
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	pausedUntil, err := nextLogicalDayStartUTC(now, user.UTCOffsetMinutes, user.DayEndTime)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if err := s.repo.UpdateUserNotificationsPausedUntil(ctx, userID, &pausedUntil); err != nil {
+		return time.Time{}, err
+	}
+
+	return pausedUntil, nil
+}
+
 func (s *Service) ListUsers(ctx context.Context) ([]domain.User, error) {
 	return s.repo.ListUsers(ctx)
 }
 
-func (s *Service) UpdateSettings(ctx context.Context, userID int64, morningTime string, reminderIntervalMinutes int) error {
+func (s *Service) UpdateSettings(ctx context.Context, userID int64, morningTime, dayEndTime string, reminderIntervalMinutes int) error {
 	normalizedMorningTime, err := NormalizeClock(morningTime)
+	if err != nil {
+		return err
+	}
+	normalizedDayEndTime, err := NormalizeClock(dayEndTime)
 	if err != nil {
 		return err
 	}
@@ -95,7 +119,7 @@ func (s *Service) UpdateSettings(ctx context.Context, userID int64, morningTime 
 		return fmt.Errorf("reminder interval must be positive")
 	}
 
-	if err := s.repo.UpdateUserSettings(ctx, userID, normalizedMorningTime, reminderIntervalMinutes); err != nil {
+	if err := s.repo.UpdateUserSettings(ctx, userID, normalizedMorningTime, normalizedDayEndTime, reminderIntervalMinutes); err != nil {
 		return err
 	}
 
@@ -157,11 +181,15 @@ func (s *Service) SetActivityTimesPerDay(ctx context.Context, userID, activityID
 	if times < 1 {
 		return fmt.Errorf("times per day must be at least 1")
 	}
-	return s.repo.UpdateActivityTimesPerDay(ctx, userID, activityID, times)
+	if err := s.repo.UpdateActivityTimesPerDay(ctx, userID, activityID, times); err != nil {
+		return err
+	}
+
+	return s.syncTodayPlanTimesPerDay(ctx, userID, activityID, times)
 }
 
-func (s *Service) SetActivityReminderWindow(ctx context.Context, userID, activityID int64, windowStart, windowEnd string) error {
-	return s.repo.UpdateActivityReminderWindow(ctx, userID, activityID, windowStart, windowEnd)
+func (s *Service) SetActivityReminderWindows(ctx context.Context, userID, activityID int64, windows []domain.ReminderWindow) error {
+	return s.repo.UpdateActivityReminderWindows(ctx, userID, activityID, windows)
 }
 
 func (s *Service) DeleteActivity(ctx context.Context, userID, activityID int64) error {
@@ -180,7 +208,7 @@ func (s *Service) StartMorningPlan(ctx context.Context, userID int64, now time.T
 
 	// A plan is unique per user and local calendar day (based on user's UTC offset).
 	// Repeated morning ticks should reuse the same plan instead of creating duplicates.
-	dayLocal := localDay(now, user.UTCOffsetMinutes)
+	dayLocal := localDay(now, user.UTCOffsetMinutes, user.DayEndTime)
 	if existing, err := s.repo.GetDayPlan(ctx, userID, dayLocal); err == nil {
 		return existing, nil
 	} else if err != domain.ErrNotFound {
@@ -356,20 +384,35 @@ func (s *Service) PickReminder(ctx context.Context, userID int64, now time.Time)
 		return nil, nil, domain.ErrPlanClosed
 	}
 
-	// Filter candidates to those whose reminder window is currently open.
-	windowCandidates := make([]int, 0, len(candidates))
+	windowedOpenCandidates := make([]int, 0, len(candidates))
+	regularCandidates := make([]int, 0, len(candidates))
 	for _, idx := range candidates {
 		act, ok := actMap[plan.Items[idx].ActivityID]
-		if !ok || isInReminderWindow(act, clock) {
-			windowCandidates = append(windowCandidates, idx)
+		if !ok {
+			regularCandidates = append(regularCandidates, idx)
+			continue
 		}
+		if hasReminderWindows(act) {
+			if isInReminderWindow(act, clock) {
+				windowedOpenCandidates = append(windowedOpenCandidates, idx)
+			}
+			continue
+		}
+		regularCandidates = append(regularCandidates, idx)
 	}
-	if len(windowCandidates) == 0 {
-		// All pending activities are outside their reminder windows; skip this tick.
+	var eligibleCandidates []int
+	if len(windowedOpenCandidates) > 0 {
+		eligibleCandidates = windowedOpenCandidates
+	} else if len(regularCandidates) > 0 {
+		eligibleCandidates = regularCandidates
+	}
+	if len(eligibleCandidates) == 0 {
+		// There are pending windowed activities but none are currently open, and no
+		// unrestricted candidates are available to fall back to.
 		return nil, nil, domain.ErrPlanNotReady
 	}
 
-	index := windowCandidates[s.rng.Intn(len(windowCandidates))]
+	index := eligibleCandidates[s.rng.Intn(len(eligibleCandidates))]
 	plan.Items[index].ReminderCycle = plan.Cycle
 	plan.Items[index].UpdatedAt = now.UTC()
 	nextReminder := now.Add(time.Duration(user.ReminderIntervalMinutes) * time.Minute).UTC()
@@ -388,19 +431,44 @@ func localClockHHMM(now time.Time, utcOffsetMinutes int) string {
 	return now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute).Format("15:04")
 }
 
-// isInReminderWindow returns true if the activity has no window restriction or if
-// localClock (format "HH:MM") falls inside the configured window. Supports
-// midnight-crossing windows (e.g. ReminderWindowStart="22:00", End="06:00").
-func isInReminderWindow(act domain.Activity, localClock string) bool {
+func hasReminderWindows(act domain.Activity) bool {
+	return len(reminderWindows(act)) > 0
+}
+
+func reminderWindows(act domain.Activity) []domain.ReminderWindow {
+	if len(act.ReminderWindows) > 0 {
+		return act.ReminderWindows
+	}
 	if act.ReminderWindowStart == "" || act.ReminderWindowEnd == "" {
+		return nil
+	}
+	return []domain.ReminderWindow{
+		{Start: act.ReminderWindowStart, End: act.ReminderWindowEnd},
+	}
+}
+
+// isInReminderWindow returns true if the activity has no window restriction or if
+// localClock (format "HH:MM") falls inside at least one configured window.
+// Supports midnight-crossing windows (e.g. Start="22:00", End="06:00").
+func isInReminderWindow(act domain.Activity, localClock string) bool {
+	windows := reminderWindows(act)
+	if len(windows) == 0 {
 		return true
 	}
-	s, e := act.ReminderWindowStart, act.ReminderWindowEnd
-	if s <= e {
-		return localClock >= s && localClock < e
+	for _, w := range windows {
+		s, e := w.Start, w.End
+		if s <= e {
+			if localClock >= s && localClock < e {
+				return true
+			}
+			continue
+		}
+		// Window crosses midnight.
+		if localClock >= s || localClock < e {
+			return true
+		}
 	}
-	// Window crosses midnight.
-	return localClock >= s || localClock < e
+	return false
 }
 
 func (s *Service) MarkActivityDone(ctx context.Context, userID, activityID int64, now time.Time) (*domain.DayPlan, error) {
@@ -432,8 +500,10 @@ func (s *Service) MarkActivityDone(ctx context.Context, userID, activityID int64
 		if pendingSelectedCount(plan) == 0 {
 			s.completePlan(plan, stamp)
 		} else {
-			nextReminder := now.Add(time.Duration(user.ReminderIntervalMinutes) * time.Minute).UTC()
-			plan.NextReminderAt = &nextReminder
+			if plan.NextReminderAt == nil || !plan.NextReminderAt.After(stamp) {
+				nextReminder := stamp.Add(time.Duration(user.ReminderIntervalMinutes) * time.Minute)
+				plan.NextReminderAt = &nextReminder
+			}
 		}
 
 		if err := s.repo.SaveDayPlan(ctx, plan); err != nil {
@@ -506,6 +576,45 @@ func (s *Service) BuildStats(ctx context.Context, userID int64) (domain.DailySta
 	return stats, nil
 }
 
+func (s *Service) TrackReminderMessage(
+	ctx context.Context,
+	userID, chatID int64,
+	messageID int,
+	dayLocal string,
+	kind domain.ReminderMessageKind,
+) error {
+	if messageID <= 0 {
+		return fmt.Errorf("message id must be positive")
+	}
+	if strings.TrimSpace(dayLocal) == "" {
+		return fmt.Errorf("logical day must not be empty")
+	}
+	if kind == "" {
+		return fmt.Errorf("reminder kind must not be empty")
+	}
+
+	now := s.now().UTC()
+	return s.repo.SaveReminderMessage(ctx, &domain.ReminderMessage{
+		UserID:     userID,
+		ChatID:     chatID,
+		MessageID:  messageID,
+		LogicalDay: dayLocal,
+		Kind:       kind,
+		SentAt:     now,
+	})
+}
+
+func (s *Service) ListReminderMessagesBeforeDay(ctx context.Context, userID int64, dayLocal string) ([]domain.ReminderMessage, error) {
+	if strings.TrimSpace(dayLocal) == "" {
+		return nil, fmt.Errorf("logical day must not be empty")
+	}
+	return s.repo.ListReminderMessagesBeforeDay(ctx, userID, dayLocal)
+}
+
+func (s *Service) RemoveTrackedReminderMessage(ctx context.Context, userID int64, messageID int) error {
+	return s.repo.DeleteReminderMessage(ctx, userID, messageID)
+}
+
 func ParseUTCOffset(input string) (int, error) {
 	value := strings.TrimSpace(strings.ToUpper(input))
 	if value == "UTC" || value == "Z" {
@@ -566,9 +675,46 @@ func NormalizeClock(input string) (string, error) {
 	return parsed.Format("15:04"), nil
 }
 
-func localDay(now time.Time, utcOffsetMinutes int) string {
-	// Persist day boundaries using user's local date, not server timezone.
-	return now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute).Format("2006-01-02")
+func localDay(now time.Time, utcOffsetMinutes int, dayEndTime string) string {
+	// Persist day boundaries using user's logical local day.
+	local := now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute)
+	normalizedDayEndTime, err := NormalizeClock(dayEndTime)
+	if err != nil {
+		normalizedDayEndTime = defaultDayEndTime
+	}
+	if local.Format("15:04") < normalizedDayEndTime {
+		local = local.AddDate(0, 0, -1)
+	}
+	return local.Format("2006-01-02")
+}
+
+func nextLogicalDayStartUTC(now time.Time, utcOffsetMinutes int, dayEndTime string) (time.Time, error) {
+	normalizedDayEndTime, err := NormalizeClock(dayEndTime)
+	if err != nil {
+		normalizedDayEndTime = defaultDayEndTime
+	}
+
+	dayEndClock, err := time.Parse("15:04", normalizedDayEndTime)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	localNow := now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute)
+	localBoundary := time.Date(
+		localNow.Year(),
+		localNow.Month(),
+		localNow.Day(),
+		dayEndClock.Hour(),
+		dayEndClock.Minute(),
+		0,
+		0,
+		time.UTC,
+	)
+	if !localNow.Before(localBoundary) {
+		localBoundary = localBoundary.Add(24 * time.Hour)
+	}
+
+	return localBoundary.Add(-time.Duration(utcOffsetMinutes) * time.Minute).UTC(), nil
 }
 
 func pendingSelectedCount(plan *domain.DayPlan) int {
@@ -601,7 +747,7 @@ func (s *Service) loadTodayPlan(ctx context.Context, userID int64, now time.Time
 		return nil, nil, err
 	}
 
-	plan, err := s.repo.GetDayPlan(ctx, userID, localDay(now, user.UTCOffsetMinutes))
+	plan, err := s.repo.GetDayPlan(ctx, userID, localDay(now, user.UTCOffsetMinutes, user.DayEndTime))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -633,6 +779,68 @@ func (s *Service) rescheduleActivePlanReminder(ctx context.Context, userID int64
 	plan.NextReminderAt = &nextReminder
 	plan.UpdatedAt = now
 
+	return s.repo.SaveDayPlan(ctx, plan)
+}
+
+func (s *Service) syncTodayPlanTimesPerDay(ctx context.Context, userID, activityID int64, timesPerDay int) error {
+	now := s.now().UTC()
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	plan, err := s.repo.GetDayPlan(ctx, userID, localDay(now, user.UTCOffsetMinutes, user.DayEndTime))
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	updated := false
+	for i := range plan.Items {
+		if plan.Items[i].ActivityID != activityID {
+			continue
+		}
+
+		plan.Items[i].TimesPerDay = timesPerDay
+		if plan.Items[i].CompletedCount >= timesPerDay {
+			plan.Items[i].Completed = true
+			if plan.Items[i].CompletedAt == nil {
+				completedAt := now
+				plan.Items[i].CompletedAt = &completedAt
+			}
+		} else {
+			plan.Items[i].Completed = false
+			plan.Items[i].CompletedAt = nil
+		}
+		plan.Items[i].UpdatedAt = now
+		updated = true
+		break
+	}
+	if !updated {
+		return nil
+	}
+
+	pendingSelected := pendingSelectedCount(plan)
+	switch plan.Status {
+	case domain.PlanStatusCompleted:
+		if pendingSelected > 0 {
+			plan.Status = domain.PlanStatusActive
+			plan.CompletedAt = nil
+			nextReminder := now.Add(time.Duration(user.ReminderIntervalMinutes) * time.Minute)
+			plan.NextReminderAt = &nextReminder
+		}
+	case domain.PlanStatusActive:
+		if pendingSelected == 0 {
+			s.completePlan(plan, now)
+		} else if plan.NextReminderAt == nil {
+			nextReminder := now.Add(time.Duration(user.ReminderIntervalMinutes) * time.Minute)
+			plan.NextReminderAt = &nextReminder
+		}
+	}
+
+	plan.UpdatedAt = now
 	return s.repo.SaveDayPlan(ctx, plan)
 }
 

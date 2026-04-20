@@ -30,6 +30,11 @@ keyboards:
         action: handler
         target: open_stats
         show_if: registered
+      - id: finish_day
+        text: buttons.finish_day
+        action: handler
+        target: finish_day
+        show_if: registered
   registration_back:
     - - id: back_to_menu
         text: buttons.back
@@ -72,6 +77,10 @@ keyboards:
         action: goto
         target: menu
   oneoff_items_back_menu:
+    - - id: oneoff_no_items
+        text: buttons.oneoff_no_items
+        action: handler
+        target: oneoff_items_none
     - - id: back_to_oneoff_priority
         text: buttons.back
         action: handler

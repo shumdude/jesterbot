@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"jesterbot/internal/domain"
 )
@@ -11,14 +12,15 @@ type Repository interface {
 	GetUserByID(ctx context.Context, userID int64) (*domain.User, error)
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	CreateUser(ctx context.Context, user *domain.User) error
-	UpdateUserSettings(ctx context.Context, userID int64, morningTime string, reminderIntervalMinutes int) error
+	UpdateUserSettings(ctx context.Context, userID int64, morningTime, dayEndTime string, reminderIntervalMinutes int) error
+	UpdateUserNotificationsPausedUntil(ctx context.Context, userID int64, pausedUntil *time.Time) error
 	GetUserTickInterval(ctx context.Context, userID int64) (int, error)
 	SaveUserTickInterval(ctx context.Context, userID int64, minutes int) error
 
 	CreateActivity(ctx context.Context, activity *domain.Activity) error
 	UpdateActivity(ctx context.Context, userID, activityID int64, title string) error
 	UpdateActivityTimesPerDay(ctx context.Context, userID, activityID int64, timesPerDay int) error
-	UpdateActivityReminderWindow(ctx context.Context, userID, activityID int64, windowStart, windowEnd string) error
+	UpdateActivityReminderWindows(ctx context.Context, userID, activityID int64, windows []domain.ReminderWindow) error
 	DeleteActivity(ctx context.Context, userID, activityID int64) error
 	ListActivities(ctx context.Context, userID int64) ([]domain.Activity, error)
 
@@ -32,4 +34,8 @@ type Repository interface {
 	ListOneOffTasks(ctx context.Context, userID int64) ([]domain.OneOffTask, error)
 	SaveOneOffTask(ctx context.Context, task *domain.OneOffTask) error
 	DeleteOneOffTask(ctx context.Context, userID, taskID int64) error
+
+	SaveReminderMessage(ctx context.Context, message *domain.ReminderMessage) error
+	ListReminderMessagesBeforeDay(ctx context.Context, userID int64, dayLocal string) ([]domain.ReminderMessage, error)
+	DeleteReminderMessage(ctx context.Context, userID int64, messageID int) error
 }

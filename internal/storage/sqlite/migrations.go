@@ -103,4 +103,26 @@ var migrations = []string{
 		UNIQUE(task_id, sort_order),
 		FOREIGN KEY(task_id) REFERENCES one_off_tasks(id) ON DELETE CASCADE
 	);`,
+	`ALTER TABLE users ADD COLUMN day_end_time TEXT NOT NULL DEFAULT '00:00';`,
+	`ALTER TABLE users ADD COLUMN notifications_paused_until TEXT;`,
+	`CREATE TABLE IF NOT EXISTS activity_reminder_windows (
+		activity_id INTEGER NOT NULL,
+		sort_order INTEGER NOT NULL,
+		window_start TEXT NOT NULL,
+		window_end TEXT NOT NULL,
+		PRIMARY KEY(activity_id, sort_order),
+		FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE
+	);`,
+	`CREATE TABLE IF NOT EXISTS reminder_messages (
+		user_id INTEGER NOT NULL,
+		chat_id INTEGER NOT NULL,
+		message_id INTEGER NOT NULL,
+		logical_day TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		sent_at TEXT NOT NULL,
+		PRIMARY KEY(user_id, message_id),
+		FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_reminder_messages_user_day
+		ON reminder_messages(user_id, logical_day);`,
 }

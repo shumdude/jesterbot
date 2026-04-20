@@ -12,6 +12,7 @@ import (
 )
 
 const schedulerTick = time.Minute
+const reminderCleanupDeleteDelay = 120 * time.Millisecond
 
 type Scheduler struct {
 	logger      *slog.Logger
@@ -69,10 +70,38 @@ func (s *Scheduler) runTick(ctx context.Context) {
 			continue
 		}
 
+		currentDayLocal := logicalDayForUser(now, user.UTCOffsetMinutes, user.DayEndTime)
+		s.cleanupPreviousReminderMessages(ctx, user, currentDayLocal)
+		if notificationsPaused(user, now) {
+			continue
+		}
+
 		s.handleMorning(ctx, user, now)
 		s.handleReminder(ctx, user, now)
-		s.handleOneOffReminder(ctx, user, now)
+		s.handleOneOffReminder(ctx, user, now, currentDayLocal)
 	}
+}
+
+func (s *Scheduler) cleanupPreviousReminderMessages(ctx context.Context, user domain.User, currentDayLocal string) {
+	messages, err := s.service.ListReminderMessagesBeforeDay(ctx, user.ID, currentDayLocal)
+	if err != nil {
+		s.logger.Error("scheduler list stale reminder messages failed", "error", err, "user_id", user.ID, "day", currentDayLocal)
+		return
+	}
+	if len(messages) == 0 {
+		return
+	}
+
+	result := s.notifier.CleanupReminderMessages(ctx, user.ID, messages, reminderCleanupDeleteDelay)
+	s.logger.Info(
+		"scheduler cleanup stale reminder messages",
+		"user_id", user.ID,
+		"chat_id", user.ChatID,
+		"current_day", currentDayLocal,
+		"attempted", result.Attempted,
+		"deleted", result.Deleted,
+		"failed", result.Failed,
+	)
 }
 
 func (s *Scheduler) handleMorning(ctx context.Context, user domain.User, now time.Time) {
@@ -140,10 +169,10 @@ func (s *Scheduler) handleReminder(ctx context.Context, user domain.User, now ti
 		"activity_title", item.TitleSnapshot,
 		"cycle", updatedPlan.Cycle,
 	)
-	s.notifier.SendReminder(ctx, user.ChatID, item, updatedPlan)
+	s.notifier.SendReminder(ctx, user.ID, user.ChatID, item, updatedPlan)
 }
 
-func (s *Scheduler) handleOneOffReminder(ctx context.Context, user domain.User, now time.Time) {
+func (s *Scheduler) handleOneOffReminder(ctx context.Context, user domain.User, now time.Time, currentDayLocal string) {
 	task, err := s.service.PickOneOffReminder(ctx, user.ID, now)
 	if errors.Is(err, domain.ErrNotFound) {
 		return
@@ -161,7 +190,7 @@ func (s *Scheduler) handleOneOffReminder(ctx context.Context, user domain.User, 
 		"task_title", task.Title,
 		"priority", task.Priority,
 	)
-	s.notifier.SendOneOffReminder(ctx, user.ChatID, task)
+	s.notifier.SendOneOffReminder(ctx, user.ID, user.ChatID, currentDayLocal, task)
 }
 
 func localClock(now time.Time, offsetMinutes int) string {
@@ -170,6 +199,25 @@ func localClock(now time.Time, offsetMinutes int) string {
 
 func sameMinute(left, right time.Time) bool {
 	return left.UTC().Format("2006-01-02T15:04") == right.UTC().Format("2006-01-02T15:04")
+}
+
+func notificationsPaused(user domain.User, now time.Time) bool {
+	if user.NotificationsPausedUntil == nil {
+		return false
+	}
+	return user.NotificationsPausedUntil.After(now.UTC())
+}
+
+func logicalDayForUser(now time.Time, utcOffsetMinutes int, dayEndTime string) string {
+	local := now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute)
+	normalizedDayEndTime, err := service.NormalizeClock(dayEndTime)
+	if err != nil {
+		normalizedDayEndTime = "00:00"
+	}
+	if local.Format("15:04") < normalizedDayEndTime {
+		local = local.AddDate(0, 0, -1)
+	}
+	return local.Format("2006-01-02")
 }
 
 func (s *Scheduler) shouldProcessUser(userID int64, now time.Time, tickIntervalMinutes int) bool {

@@ -3,27 +3,35 @@ package domain
 import "time"
 
 type User struct {
-	ID                      int64
-	TelegramUserID          int64
-	ChatID                  int64
-	Name                    string
-	UTCOffsetMinutes        int
-	MorningTime             string
-	ReminderIntervalMinutes int
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+	ID                       int64
+	TelegramUserID           int64
+	ChatID                   int64
+	Name                     string
+	UTCOffsetMinutes         int
+	MorningTime              string
+	DayEndTime               string
+	NotificationsPausedUntil *time.Time
+	ReminderIntervalMinutes  int
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
 }
 
 type Activity struct {
-	ID                 int64
-	UserID             int64
-	Title              string
-	SortOrder          int
-	TimesPerDay        int
+	ID                  int64
+	UserID              int64
+	Title               string
+	SortOrder           int
+	TimesPerDay         int
 	ReminderWindowStart string // "HH:MM" local time; empty = no restriction
 	ReminderWindowEnd   string // "HH:MM" local time; empty = no restriction
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ReminderWindows     []ReminderWindow
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type ReminderWindow struct {
+	Start string // "HH:MM" local time
+	End   string // "HH:MM" local time
 }
 
 type OneOffTaskPriority string
@@ -72,6 +80,22 @@ type OneOffReminderSettings struct {
 	HighPriorityMinutes   int
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
+}
+
+type ReminderMessageKind string
+
+const (
+	ReminderMessageKindDaily  ReminderMessageKind = "daily_plan"
+	ReminderMessageKindOneOff ReminderMessageKind = "one_off"
+)
+
+type ReminderMessage struct {
+	UserID     int64
+	ChatID     int64
+	MessageID  int
+	LogicalDay string
+	Kind       ReminderMessageKind
+	SentAt     time.Time
 }
 
 type PlanStatus string

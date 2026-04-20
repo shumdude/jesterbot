@@ -77,30 +77,28 @@ func (r *Controller) handleActivityCallback(ctx context.Context, _ *bot.Bot, upd
 		})
 		_ = sess.Transition(ctx, constants.SceneEditActivity)
 		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_edit"), r.sceneKeyboardMarkup("activity_detail_back_menu", userID, chatID))
+	case strings.HasPrefix(data, "activity:times:set:"):
+		activityID, page, timesPerDay, err := parseActivityTimesCallback(data, "set")
+		if err != nil {
+			return
+		}
+		r.showActivityTimesAsEdit(ctx, chatID, messageID, user.ID, activityID, page, timesPerDay)
+	case strings.HasPrefix(data, "activity:times:confirm:"):
+		activityID, page, timesPerDay, err := parseActivityTimesCallback(data, "confirm")
+		if err != nil {
+			return
+		}
+		if err := r.service.SetActivityTimesPerDay(ctx, user.ID, activityID, timesPerDay); err != nil {
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_times", err.Error()), nil)
+			return
+		}
+		r.showActivityDetailAsEdit(ctx, chatID, messageID, user.ID, activityID, page, tr("activity_success_times"))
 	case strings.HasPrefix(data, "activity:times:"):
 		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
 			return
 		}
-		activities, err := r.service.ListActivities(ctx, user.ID)
-		if err != nil {
-			r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), nil)
-			return
-		}
-		var activityTitle string
-		for _, a := range activities {
-			if a.ID == activityID {
-				activityTitle = a.Title
-				break
-			}
-		}
-		sess := r.session(userID, chatID)
-		_ = sess.SetStrings(constants.NSActivity, map[string]string{
-			constants.KeyActivityID:   strconv.FormatInt(activityID, 10),
-			constants.KeyActivityPage: strconv.Itoa(page),
-		})
-		_ = sess.Transition(ctx, constants.SceneSetActivityTimes)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_prompt_times", activityTitle), r.sceneKeyboardMarkup("activity_detail_back_menu", userID, chatID))
+		r.showActivityTimesAsEdit(ctx, chatID, messageID, user.ID, activityID, page, 0)
 	case strings.HasPrefix(data, "activity:window:"):
 		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
@@ -111,14 +109,10 @@ func (r *Controller) handleActivityCallback(ctx context.Context, _ *bot.Bot, upd
 			r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), nil)
 			return
 		}
-		var windowDesc string
+		windowDesc := tr("activity_window_none")
 		for _, a := range activities {
 			if a.ID == activityID {
-				if a.ReminderWindowStart != "" {
-					windowDesc = a.ReminderWindowStart + "–" + a.ReminderWindowEnd
-				} else {
-					windowDesc = tr("activity_window_none")
-				}
+				windowDesc = formatActivityReminderWindows(a)
 				break
 			}
 		}
@@ -240,6 +234,10 @@ func (r *Controller) handleSettingsCallback(ctx context.Context, _ *bot.Bot, upd
 		sess := r.session(userID, chatID)
 		_ = sess.Transition(ctx, constants.SceneUpdateMorning)
 		r.showScreenFromCallback(ctx, chatID, messageID, tr("settings_prompt_morning"), r.sceneKeyboardMarkup("settings_back_menu", userID, chatID))
+	case "settings:day_end":
+		sess := r.session(userID, chatID)
+		_ = sess.Transition(ctx, constants.SceneUpdateDayEnd)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("settings_prompt_day_end"), r.sceneKeyboardMarkup("settings_back_menu", userID, chatID))
 	case "settings:interval":
 		sess := r.session(userID, chatID)
 		_ = sess.Transition(ctx, constants.SceneUpdateReminder)
@@ -272,6 +270,9 @@ func (r *Controller) handleSettingsCallback(ctx context.Context, _ *bot.Bot, upd
 		sess := r.session(userID, chatID)
 		_ = sess.Transition(ctx, constants.SceneUpdateOneOffReminder)
 		r.showScreenFromCallback(ctx, chatID, messageID, oneOffReminderSettingsPrompt(settings), r.sceneKeyboardMarkup("settings_back_menu", userID, chatID))
+	case "settings:clear_chat":
+		result := clearChatMessagesWithDelay(ctx, chatID, messageID, r.deleteMessage, time.Sleep, settingsChatCleanupDeleteDelay)
+		r.showSettingsFromCallback(ctx, chatID, userID, messageID, tr("settings_success_clear_chat", result.Deleted, result.Failed))
 	}
 }
 
@@ -363,7 +364,45 @@ func (r *Controller) showActivityDetailAsEdit(ctx context.Context, chatID int64,
 	r.showScreenFromCallback(ctx, chatID, messageID, activityDetailText(prefix, activity), buildActivityDetailKeyboard(activity, page))
 }
 
+func (r *Controller) showActivityTimesAsEdit(ctx context.Context, chatID int64, messageID int, userID, activityID int64, page, draftTimes int) {
+	activities, err := r.service.ListActivities(ctx, userID)
+	if err != nil {
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), r.menuMarkup(userID, chatID))
+		return
+	}
+
+	activity, ok := findActivityByID(activities, activityID)
+	if !ok {
+		r.showActivitiesPageAsEdit(ctx, chatID, messageID, userID, tr("activity_error_list"), page)
+		return
+	}
+
+	if draftTimes < 1 {
+		draftTimes = activity.TimesPerDay
+	}
+	if draftTimes < 1 {
+		draftTimes = 1
+	}
+
+	r.showScreenFromCallback(ctx, chatID, messageID, activityTimesText(activity.Title, draftTimes), buildActivityTimesKeyboard(activity.ID, page, draftTimes))
+}
+
 func (r *Controller) showSettings(ctx context.Context, chatID, telegramUserID int64, prefix string) {
+	r.showSettingsWithRender(ctx, chatID, telegramUserID, prefix, r.showScreen)
+}
+
+func (r *Controller) showSettingsFromCallback(ctx context.Context, chatID, telegramUserID int64, currentMessageID int, prefix string) {
+	r.showSettingsWithRender(ctx, chatID, telegramUserID, prefix, func(ctx context.Context, chatID int64, text string, markup models.ReplyMarkup) {
+		r.showScreenFromCallback(ctx, chatID, currentMessageID, text, markup)
+	})
+}
+
+func (r *Controller) showSettingsWithRender(
+	ctx context.Context,
+	chatID, telegramUserID int64,
+	prefix string,
+	render func(context.Context, int64, string, models.ReplyMarkup),
+) {
 	user, err := r.registeredUser(ctx, telegramUserID)
 	if err != nil {
 		r.handleRegistrationRequired(ctx, chatID, telegramUserID)
@@ -372,16 +411,16 @@ func (r *Controller) showSettings(ctx context.Context, chatID, telegramUserID in
 
 	tickMinutes, err := r.service.GetUserTickInterval(ctx, user.ID)
 	if err != nil {
-		r.showScreen(ctx, chatID, tr("settings_error_tick_get"), nil)
+		render(ctx, chatID, tr("settings_error_tick_get"), nil)
 		return
 	}
 	oneOffSettings, err := r.service.GetOneOffReminderSettings(ctx, user.ID)
 	if err != nil {
-		r.showScreen(ctx, chatID, tr("settings_error_oneoff_get"), nil)
+		render(ctx, chatID, tr("settings_error_oneoff_get"), nil)
 		return
 	}
 
-	r.showScreen(ctx, chatID, prefix+"\n\n"+settingsText(user, tickMinutes, oneOffSettings), buildSettingsKeyboard())
+	render(ctx, chatID, prefix+"\n\n"+settingsText(user, tickMinutes, oneOffSettings), buildSettingsKeyboard())
 }
 
 func (r *Controller) mustActivities(ctx context.Context, userID int64) []domain.Activity {
@@ -545,27 +584,46 @@ func telegramHTTPClientTimeout(pollTimeout time.Duration) time.Duration {
 	return httpTimeout
 }
 
-// parseWindowInput parses "HH:MM-HH:MM" into (start, end). Returns an error if
-// either part is not a valid 24-hour clock time or start equals end.
-func parseWindowInput(input string) (start, end string, err error) {
-	parts := strings.Split(strings.TrimSpace(input), "-")
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("expected HH:MM-HH:MM")
+// parseWindowInput parses one or multiple reminder windows in "HH:MM-HH:MM" format.
+// Supported separators between windows: comma, semicolon, newline.
+func parseWindowInput(input string) ([]domain.ReminderWindow, error) {
+	normalized := strings.NewReplacer("\n", ",", ";", ",").Replace(strings.TrimSpace(input))
+	chunks := strings.Split(normalized, ",")
+	windows := make([]domain.ReminderWindow, 0, len(chunks))
+	for _, chunk := range chunks {
+		segment := strings.TrimSpace(chunk)
+		if segment == "" {
+			continue
+		}
+
+		parts := strings.Split(segment, "-")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("expected HH:MM-HH:MM")
+		}
+		startParsed, parseErr := time.Parse("15:04", strings.TrimSpace(parts[0]))
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid start time")
+		}
+		endParsed, parseErr := time.Parse("15:04", strings.TrimSpace(parts[1]))
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid end time")
+		}
+
+		start := startParsed.Format("15:04")
+		end := endParsed.Format("15:04")
+		if start == end {
+			return nil, fmt.Errorf("start and end must differ")
+		}
+
+		windows = append(windows, domain.ReminderWindow{
+			Start: start,
+			End:   end,
+		})
 	}
-	parsed, parseErr := time.Parse("15:04", strings.TrimSpace(parts[0]))
-	if parseErr != nil {
-		return "", "", fmt.Errorf("invalid start time")
+	if len(windows) == 0 {
+		return nil, fmt.Errorf("expected at least one window")
 	}
-	start = parsed.Format("15:04")
-	parsed, parseErr = time.Parse("15:04", strings.TrimSpace(parts[1]))
-	if parseErr != nil {
-		return "", "", fmt.Errorf("invalid end time")
-	}
-	end = parsed.Format("15:04")
-	if start == end {
-		return "", "", fmt.Errorf("start and end must differ")
-	}
-	return start, end, nil
+	return windows, nil
 }
 
 func parseID(data string) (int64, error) {
@@ -596,7 +654,11 @@ func activitiesTextPage(activities []domain.Activity, page, pageSize int) string
 		lines = append(lines, pageSummary(view.Page, view.TotalPages, view.Start, view.End, view.TotalItems))
 	}
 	for i, activity := range view.Items {
-		lines = append(lines, fmt.Sprintf("%d. %s", view.Start+i+1, activity.Title))
+		timesPerDay := activity.TimesPerDay
+		if timesPerDay < 1 {
+			timesPerDay = 1
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s (%dx)", view.Start+i+1, activity.Title, timesPerDay))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -607,10 +669,7 @@ func activityDetailText(prefix string, activity domain.Activity) string {
 		timesPerDay = 1
 	}
 
-	window := tr("activity_window_none")
-	if activity.ReminderWindowStart != "" && activity.ReminderWindowEnd != "" {
-		window = tr("activity_window_value", activity.ReminderWindowStart, activity.ReminderWindowEnd)
-	}
+	window := formatActivityReminderWindows(activity)
 
 	lines := []string{
 		prefix,
@@ -621,6 +680,37 @@ func activityDetailText(prefix string, activity domain.Activity) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func activityTimesText(title string, timesPerDay int) string {
+	if timesPerDay < 1 {
+		timesPerDay = 1
+	}
+	return tr("activity_prompt_times_inline", title, timesPerDay)
+}
+
+func formatActivityReminderWindows(activity domain.Activity) string {
+	windows := activityReminderWindows(activity)
+	if len(windows) == 0 {
+		return tr("activity_window_none")
+	}
+	parts := make([]string, 0, len(windows))
+	for _, window := range windows {
+		parts = append(parts, tr("activity_window_value", window.Start, window.End))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func activityReminderWindows(activity domain.Activity) []domain.ReminderWindow {
+	if len(activity.ReminderWindows) > 0 {
+		return activity.ReminderWindows
+	}
+	if activity.ReminderWindowStart == "" || activity.ReminderWindowEnd == "" {
+		return nil
+	}
+	return []domain.ReminderWindow{
+		{Start: activity.ReminderWindowStart, End: activity.ReminderWindowEnd},
+	}
 }
 
 func findActivityByID(activities []domain.Activity, activityID int64) (domain.Activity, bool) {
@@ -751,6 +841,7 @@ func settingsText(user *domain.User, tickMinutes int, oneOffSettings *domain.One
 		tr("settings_summary_language", tr("language_ru")),
 		tr("settings_summary_timezone", formatUTCOffset(user.UTCOffsetMinutes)),
 		tr("settings_summary_morning", user.MorningTime),
+		tr("settings_summary_day_end", user.DayEndTime),
 		tr("settings_summary_interval", user.ReminderIntervalMinutes),
 		tr("settings_summary_tick", tickMinutes),
 		tr(
