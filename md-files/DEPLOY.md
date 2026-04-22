@@ -12,12 +12,20 @@ The repository supports three practical runtime paths:
 
 The recommended production path is native binary + `systemd`.
 
+## Production DB Policy
+
+- The bot is already used in production.
+- Do not modify the SQLite schema directly on a live instance.
+- Do not rewrite existing migration files that may already be applied.
+- Any schema change must be delivered only as a new forward migration.
+
 ## Prerequisites
 
 - Linux host with outbound internet access
 - Telegram bot token
 - Go toolchain for building on the server, or a prebuilt binary copied to the server
 - `git`, `systemd`, and `sqlite` filesystem access
+- `sqlite3` CLI installed on the host (required for `jesterbot-backup.service`)
 
 ## Runtime Configuration
 
@@ -146,6 +154,39 @@ sudo systemctl status jesterbot
 sudo journalctl -u jesterbot -n 200 --no-pager
 ```
 
+### 8. Enable daily SQLite backups (3-day retention)
+
+Backup units require installed `sqlite3` CLI on the host.
+
+Install backup artifacts:
+
+```bash
+sudo cp deploy/systemd/jesterbot-backup.service /etc/systemd/system/jesterbot-backup.service
+sudo cp deploy/systemd/jesterbot-backup.timer /etc/systemd/system/jesterbot-backup.timer
+sudo chmod +x /opt/jesterbot/deploy/systemd/jesterbot-backup.sh
+```
+
+Enable the timer:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now jesterbot-backup.timer
+```
+
+Verify backup scheduling and first run:
+
+```bash
+sudo systemctl list-timers jesterbot-backup.timer --all
+sudo systemctl start jesterbot-backup.service
+sudo systemctl status jesterbot-backup.service --no-pager
+```
+
+Defaults (can be overridden via environment):
+
+- DB path: `JESTERBOT_DB_PATH` (default `/opt/jesterbot/data/jesterbot.db`)
+- Backup directory: `JESTERBOT_BACKUP_DIR` (default `/opt/jesterbot/backups`)
+- Retention days: `JESTERBOT_BACKUP_RETENTION_DAYS` (default `3`)
+
 ## Option 3: Docker
 
 ### 1. Build the image
@@ -228,11 +269,14 @@ docker run -d \
 
 SQLite data lives at the DB path configured through `JESTERBOT_DB_PATH`.
 
-At minimum, back up:
+For native `systemd` deployment, use `jesterbot-backup.timer` +
+`jesterbot-backup.service` + `deploy/systemd/jesterbot-backup.sh` to run daily backups and remove backup files older than 3 days.
 
-- the SQLite database file
+At minimum, keep backups of:
+
+- SQLite database snapshots from `/opt/jesterbot/backups`
 - the `.env` or Docker env file
-- your `systemd` unit if you changed it locally
+- your custom `systemd` unit files if you changed them locally
 
 ## Validation
 

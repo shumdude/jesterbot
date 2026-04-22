@@ -1,0 +1,13 @@
+# Schedules daily execution of jesterbot-backup.service.
+# Uses persistent timers so missed runs execute after reboot.
+#
+[Unit]
+Description=Run Jesterbot SQLite backup daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=jesterbot-backup.service
+
+[Install]
+WantedBy=timers.target

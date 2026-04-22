@@ -104,3 +104,16 @@ func (r *Controller) OpenStats(ctx context.Context, chatID, telegramUserID int64
 	}
 	r.showScreen(ctx, chatID, statsText(stats), buildStatsKeyboard())
 }
+
+func (r *Controller) FinishDay(ctx context.Context, chatID, telegramUserID int64) {
+	user, err := r.registeredUser(ctx, telegramUserID)
+	if err != nil {
+		r.handleRegistrationRequired(ctx, chatID, telegramUserID)
+		return
+	}
+	if _, err := r.service.FinishDay(ctx, user.ID, time.Now().UTC()); err != nil {
+		r.showScreen(ctx, chatID, tr("finish_day_error", err.Error()), r.menuMarkup(user.TelegramUserID, chatID))
+		return
+	}
+	r.showScreen(ctx, chatID, tr("finish_day_success"), r.menuMarkup(user.TelegramUserID, chatID))
+}

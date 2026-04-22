@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-telegram/bot/models"
 	tgamlengine "github.com/shumdude/tgaml/pkg/engine"
@@ -45,6 +46,38 @@ func TestMenuMarkupUsesTelegramUserIDForRegisteredUser(t *testing.T) {
 	if !containsSubstring(buttons, "Сегодня") {
 		t.Fatalf("expected registered menu buttons, got %v", buttons)
 	}
+	if !containsSubstring(buttons, "Закончить день") {
+		t.Fatalf("expected finish day button, got %v", buttons)
+	}
+}
+
+func TestOneOffItemsSceneKeyboardIncludesNoSubitemsButton(t *testing.T) {
+	cfg, err := botconfig.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	repo := &menuMarkupRepo{
+		userByTelegramID: map[int64]*domain.User{
+			777001: {
+				ID:             42,
+				TelegramUserID: 777001,
+				ChatID:         9001,
+				Name:           "Alexey",
+			},
+		},
+	}
+	svc := service.New(repo, 30)
+	eng := tgamlengine.New(cfg, session_backend.New(constants.SceneMenu))
+	registerShowIf(eng, svc)
+
+	controller := &Controller{service: svc, eng: eng}
+	markup := controller.sceneKeyboardMarkup("oneoff_items_back_menu", 777001, 9001)
+	buttons := collectButtonTexts(t, markup)
+
+	if !containsSubstring(buttons, "Без подпунктов") {
+		t.Fatalf("expected no-subitems button in one-off items keyboard, got %v", buttons)
+	}
 }
 
 type menuMarkupRepo struct {
@@ -71,7 +104,11 @@ func (r *menuMarkupRepo) CreateUser(context.Context, *domain.User) error {
 	return nil
 }
 
-func (r *menuMarkupRepo) UpdateUserSettings(context.Context, int64, string, int) error {
+func (r *menuMarkupRepo) UpdateUserSettings(context.Context, int64, string, string, int) error {
+	return nil
+}
+
+func (r *menuMarkupRepo) UpdateUserNotificationsPausedUntil(context.Context, int64, *time.Time) error {
 	return nil
 }
 
@@ -95,7 +132,7 @@ func (r *menuMarkupRepo) UpdateActivityTimesPerDay(context.Context, int64, int64
 	return nil
 }
 
-func (r *menuMarkupRepo) UpdateActivityReminderWindow(context.Context, int64, int64, string, string) error {
+func (r *menuMarkupRepo) UpdateActivityReminderWindows(context.Context, int64, int64, []domain.ReminderWindow) error {
 	return nil
 }
 
@@ -140,6 +177,18 @@ func (r *menuMarkupRepo) SaveOneOffTask(context.Context, *domain.OneOffTask) err
 }
 
 func (r *menuMarkupRepo) DeleteOneOffTask(context.Context, int64, int64) error {
+	return nil
+}
+
+func (r *menuMarkupRepo) SaveReminderMessage(context.Context, *domain.ReminderMessage) error {
+	return nil
+}
+
+func (r *menuMarkupRepo) ListReminderMessagesBeforeDay(context.Context, int64, string) ([]domain.ReminderMessage, error) {
+	return nil, nil
+}
+
+func (r *menuMarkupRepo) DeleteReminderMessage(context.Context, int64, int) error {
 	return nil
 }
 

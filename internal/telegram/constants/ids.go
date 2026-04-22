@@ -10,6 +10,7 @@ const (
 	SceneSetActivityTimes     = "activity_times"
 	SceneSetActivityWindow    = "activity_window"
 	SceneUpdateMorning        = "settings_morning"
+	SceneUpdateDayEnd         = "settings_day_end"
 	SceneUpdateReminder       = "settings_interval"
 	SceneUpdateTick           = "settings_tick"
 	SceneUpdateOneOffReminder = "settings_oneoff"
@@ -27,6 +28,7 @@ const (
 	HandlerOpenOneOff           = "open_oneoff"
 	HandlerOpenSettings         = "open_settings"
 	HandlerOpenStats            = "open_stats"
+	HandlerFinishDay            = "finish_day"
 	HandlerBackActivityDetail   = "back_activity_detail"
 	HandlerBackOneOffPriority   = "back_oneoff_priority"
 	HandlerAddActivity          = "activity_add_input"
@@ -34,11 +36,13 @@ const (
 	HandlerSetActivityTimes     = "activity_times_input"
 	HandlerSetActivityWindow    = "activity_window_input"
 	HandlerUpdateMorning        = "settings_morning_input"
+	HandlerUpdateDayEnd         = "settings_day_end_input"
 	HandlerUpdateReminder       = "settings_interval_input"
 	HandlerUpdateTick           = "settings_tick_input"
 	HandlerUpdateOneOffReminder = "settings_oneoff_input"
 	HandlerOneOffTitle          = "oneoff_title_input"
 	HandlerOneOffItems          = "oneoff_items_input"
+	HandlerOneOffNoItems        = "oneoff_items_none"
 )
 
 const (

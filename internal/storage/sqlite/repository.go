@@ -23,7 +23,7 @@ func NewRepository(db *sql.DB) *Repository {
 
 func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramUserID int64) (*domain.User, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, reminder_interval_minutes, created_at, updated_at
+		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, notifications_paused_until, reminder_interval_minutes, created_at, updated_at
 		FROM users
 		WHERE telegram_user_id = ?`,
 		telegramUserID,
@@ -33,7 +33,7 @@ func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramUserID int
 
 func (r *Repository) GetUserByID(ctx context.Context, userID int64) (*domain.User, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, reminder_interval_minutes, created_at, updated_at
+		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, notifications_paused_until, reminder_interval_minutes, created_at, updated_at
 		FROM users
 		WHERE id = ?`,
 		userID,
@@ -43,7 +43,7 @@ func (r *Repository) GetUserByID(ctx context.Context, userID int64) (*domain.Use
 
 func (r *Repository) ListUsers(ctx context.Context) ([]domain.User, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, reminder_interval_minutes, created_at, updated_at
+		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, notifications_paused_until, reminder_interval_minutes, created_at, updated_at
 		FROM users
 		ORDER BY id`)
 	if err != nil {
@@ -68,15 +68,22 @@ func (r *Repository) ListUsers(ctx context.Context) ([]domain.User, error) {
 }
 
 func (r *Repository) CreateUser(ctx context.Context, user *domain.User) error {
+	dayEndTime := user.DayEndTime
+	if dayEndTime == "" {
+		dayEndTime = "00:00"
+		user.DayEndTime = dayEndTime
+	}
+
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO users (
-			telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, reminder_interval_minutes, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, reminder_interval_minutes, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		user.TelegramUserID,
 		user.ChatID,
 		user.Name,
 		user.UTCOffsetMinutes,
 		user.MorningTime,
+		dayEndTime,
 		user.ReminderIntervalMinutes,
 		formatTime(user.CreatedAt),
 		formatTime(user.UpdatedAt),
@@ -93,12 +100,13 @@ func (r *Repository) CreateUser(ctx context.Context, user *domain.User) error {
 	return nil
 }
 
-func (r *Repository) UpdateUserSettings(ctx context.Context, userID int64, morningTime string, reminderIntervalMinutes int) error {
+func (r *Repository) UpdateUserSettings(ctx context.Context, userID int64, morningTime, dayEndTime string, reminderIntervalMinutes int) error {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE users
-		SET morning_time = ?, reminder_interval_minutes = ?, updated_at = ?
+		SET morning_time = ?, day_end_time = ?, reminder_interval_minutes = ?, updated_at = ?
 		WHERE id = ?`,
 		morningTime,
+		dayEndTime,
 		reminderIntervalMinutes,
 		formatTime(time.Now().UTC()),
 		userID,
@@ -118,7 +126,38 @@ func (r *Repository) UpdateUserSettings(ctx context.Context, userID int64, morni
 	return nil
 }
 
+func (r *Repository) UpdateUserNotificationsPausedUntil(ctx context.Context, userID int64, pausedUntil *time.Time) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE users
+		SET notifications_paused_until = ?, updated_at = ?
+		WHERE id = ?`,
+		formatNullableTime(pausedUntil),
+		formatTime(time.Now().UTC()),
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update user notifications pause: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("user notifications pause rows affected: %w", err)
+	}
+	if affected == 0 {
+		return domain.ErrNotFound
+	}
+
+	return nil
+}
+
 func (r *Repository) CreateActivity(ctx context.Context, activity *domain.Activity) error {
+	windows := activity.ReminderWindows
+	if len(windows) == 0 && activity.ReminderWindowStart != "" && activity.ReminderWindowEnd != "" {
+		windows = []domain.ReminderWindow{
+			{Start: activity.ReminderWindowStart, End: activity.ReminderWindowEnd},
+		}
+	}
+	windowStart, windowEnd := legacyReminderWindowColumns(windows)
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO activities (user_id, title, sort_order, times_per_day, reminder_window_start, reminder_window_end, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -126,8 +165,8 @@ func (r *Repository) CreateActivity(ctx context.Context, activity *domain.Activi
 		activity.Title,
 		activity.SortOrder,
 		activity.TimesPerDay,
-		activity.ReminderWindowStart,
-		activity.ReminderWindowEnd,
+		windowStart,
+		windowEnd,
 		formatTime(activity.CreatedAt),
 		formatTime(activity.UpdatedAt),
 	)
@@ -139,6 +178,11 @@ func (r *Repository) CreateActivity(ctx context.Context, activity *domain.Activi
 	if err != nil {
 		return fmt.Errorf("activity last insert id: %w", err)
 	}
+	if err := r.replaceActivityReminderWindows(ctx, activity.ID, windows); err != nil {
+		return err
+	}
+	activity.ReminderWindowStart, activity.ReminderWindowEnd = windowStart, windowEnd
+	activity.ReminderWindows = append([]domain.ReminderWindow(nil), windows...)
 
 	return nil
 }
@@ -210,8 +254,19 @@ func (r *Repository) DeleteActivity(ctx context.Context, userID, activityID int6
 	return nil
 }
 
-func (r *Repository) UpdateActivityReminderWindow(ctx context.Context, userID, activityID int64, windowStart, windowEnd string) error {
-	result, err := r.db.ExecContext(ctx, `
+func (r *Repository) UpdateActivityReminderWindows(ctx context.Context, userID, activityID int64, windows []domain.ReminderWindow) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update activity reminder windows: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	windowStart, windowEnd := legacyReminderWindowColumns(windows)
+	result, execErr := tx.ExecContext(ctx, `
 		UPDATE activities
 		SET reminder_window_start = ?, reminder_window_end = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
@@ -221,16 +276,42 @@ func (r *Repository) UpdateActivityReminderWindow(ctx context.Context, userID, a
 		activityID,
 		userID,
 	)
-	if err != nil {
-		return fmt.Errorf("update activity reminder window: %w", err)
+	if execErr != nil {
+		err = fmt.Errorf("update activity reminder windows: %w", execErr)
+		return err
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("activity reminder window rows affected: %w", err)
+	affected, affectedErr := result.RowsAffected()
+	if affectedErr != nil {
+		err = fmt.Errorf("activity reminder windows rows affected: %w", affectedErr)
+		return err
 	}
 	if affected == 0 {
-		return domain.ErrNotFound
+		err = domain.ErrNotFound
+		return err
+	}
+
+	if _, execErr = tx.ExecContext(ctx, `DELETE FROM activity_reminder_windows WHERE activity_id = ?`, activityID); execErr != nil {
+		err = fmt.Errorf("clear activity reminder windows: %w", execErr)
+		return err
+	}
+	for idx, window := range windows {
+		if _, execErr = tx.ExecContext(ctx, `
+			INSERT INTO activity_reminder_windows (activity_id, sort_order, window_start, window_end)
+			VALUES (?, ?, ?, ?)`,
+			activityID,
+			idx,
+			window.Start,
+			window.End,
+		); execErr != nil {
+			err = fmt.Errorf("insert activity reminder window: %w", execErr)
+			return err
+		}
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		err = fmt.Errorf("commit update activity reminder windows: %w", commitErr)
+		return err
 	}
 
 	return nil
@@ -260,6 +341,23 @@ func (r *Repository) ListActivities(ctx context.Context, userID int64) ([]domain
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("activity rows: %w", err)
+	}
+	if len(activities) == 0 {
+		return activities, nil
+	}
+
+	windowsByActivityID, err := r.loadActivityReminderWindows(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range activities {
+		windows := windowsByActivityID[activities[i].ID]
+		if len(windows) == 0 && activities[i].ReminderWindowStart != "" && activities[i].ReminderWindowEnd != "" {
+			windows = []domain.ReminderWindow{
+				{Start: activities[i].ReminderWindowStart, End: activities[i].ReminderWindowEnd},
+			}
+		}
+		activities[i].ReminderWindows = windows
 	}
 
 	return activities, nil
@@ -477,8 +575,9 @@ func scanUserRows(rows *sql.Rows) (*domain.User, error) {
 
 func scanUserScanner(scanner interface{ Scan(dest ...any) error }) (*domain.User, error) {
 	var (
-		user                 domain.User
-		createdAt, updatedAt string
+		user                     domain.User
+		notificationsPausedUntil sql.NullString
+		createdAt, updatedAt     string
 	)
 	if err := scanner.Scan(
 		&user.ID,
@@ -487,6 +586,8 @@ func scanUserScanner(scanner interface{ Scan(dest ...any) error }) (*domain.User
 		&user.Name,
 		&user.UTCOffsetMinutes,
 		&user.MorningTime,
+		&user.DayEndTime,
+		&notificationsPausedUntil,
 		&user.ReminderIntervalMinutes,
 		&createdAt,
 		&updatedAt,
@@ -496,6 +597,10 @@ func scanUserScanner(scanner interface{ Scan(dest ...any) error }) (*domain.User
 
 	var err error
 	user.CreatedAt, err = parseTime(createdAt)
+	if err != nil {
+		return nil, err
+	}
+	user.NotificationsPausedUntil, err = parseNullableTime(notificationsPausedUntil)
 	if err != nil {
 		return nil, err
 	}
@@ -701,4 +806,66 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func (r *Repository) replaceActivityReminderWindows(ctx context.Context, activityID int64, windows []domain.ReminderWindow) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM activity_reminder_windows WHERE activity_id = ?`, activityID); err != nil {
+		return fmt.Errorf("clear activity reminder windows: %w", err)
+	}
+	for idx, window := range windows {
+		if _, err := r.db.ExecContext(ctx, `
+			INSERT INTO activity_reminder_windows (activity_id, sort_order, window_start, window_end)
+			VALUES (?, ?, ?, ?)`,
+			activityID,
+			idx,
+			window.Start,
+			window.End,
+		); err != nil {
+			return fmt.Errorf("insert activity reminder window: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *Repository) loadActivityReminderWindows(ctx context.Context, userID int64) (map[int64][]domain.ReminderWindow, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT arw.activity_id, arw.window_start, arw.window_end
+		FROM activity_reminder_windows arw
+		INNER JOIN activities a ON a.id = arw.activity_id
+		WHERE a.user_id = ?
+		ORDER BY arw.activity_id, arw.sort_order`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list activity reminder windows: %w", err)
+	}
+	defer rows.Close()
+
+	windowsByActivityID := make(map[int64][]domain.ReminderWindow)
+	for rows.Next() {
+		var (
+			activityID int64
+			start      string
+			end        string
+		)
+		if err := rows.Scan(&activityID, &start, &end); err != nil {
+			return nil, fmt.Errorf("scan activity reminder window: %w", err)
+		}
+		windowsByActivityID[activityID] = append(windowsByActivityID[activityID], domain.ReminderWindow{
+			Start: start,
+			End:   end,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("activity reminder windows rows: %w", err)
+	}
+
+	return windowsByActivityID, nil
+}
+
+func legacyReminderWindowColumns(windows []domain.ReminderWindow) (string, string) {
+	if len(windows) == 0 {
+		return "", ""
+	}
+	return windows[0].Start, windows[0].End
 }

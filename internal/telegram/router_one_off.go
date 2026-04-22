@@ -173,14 +173,49 @@ func parseOneOffReminderSettingsInput(input string) (int, int, int, error) {
 
 	values := make([]int, 0, 3)
 	for _, part := range parts {
-		value, err := strconv.Atoi(strings.TrimSpace(part))
-		if err != nil || value <= 0 {
+		value, err := parseOneOffReminderIntervalMinutes(part)
+		if err != nil {
 			return 0, 0, 0, fmt.Errorf("invalid interval: %s", part)
 		}
 		values = append(values, value)
 	}
 
 	return values[0], values[1], values[2], nil
+}
+
+func parseOneOffReminderIntervalMinutes(input string) (int, error) {
+	token := strings.ToLower(strings.TrimSpace(input))
+	if token == "" {
+		return 0, fmt.Errorf("empty interval")
+	}
+
+	parsePositive := func(value string) (int, error) {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			return 0, fmt.Errorf("invalid positive interval: %s", input)
+		}
+		return parsed, nil
+	}
+
+	last := token[len(token)-1]
+	switch last {
+	case 'm', 'h', 'd':
+		baseValue, err := parsePositive(strings.TrimSpace(token[:len(token)-1]))
+		if err != nil {
+			return 0, err
+		}
+
+		switch last {
+		case 'm':
+			return baseValue, nil
+		case 'h':
+			return baseValue * 60, nil
+		case 'd':
+			return baseValue * 24 * 60, nil
+		}
+	}
+
+	return parsePositive(token)
 }
 
 func parseOneOffItemIDs(data string) (int64, int64, int, error) {
