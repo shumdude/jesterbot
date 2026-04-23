@@ -1,3 +1,8 @@
+// AI-AGENT: One-off task service logic, including checklist completion and priority-based reminders.
+// Entry points are Service methods such as CreateOneOffTask, PickOneOffReminder, and UpdateOneOffReminderSettings.
+// Tightly coupled to core.go user timing helpers, internal/domain one-off types, and telegram reminder rendering.
+// Do not change reminder scheduling semantics without checking daily quiet-hour behavior.
+//
 package service
 
 import (
@@ -181,6 +186,14 @@ func (s *Service) CompleteOneOffTask(ctx context.Context, userID, taskID int64, 
 }
 
 func (s *Service) PickOneOffReminder(ctx context.Context, userID int64, now time.Time) (*domain.OneOffTask, error) {
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if InNotificationQuietHours(now, user.UTCOffsetMinutes, user.MorningTime, user.DayEndTime) {
+		return nil, domain.ErrNotFound
+	}
+
 	tasks, err := s.repo.ListOneOffTasks(ctx, userID)
 	if err != nil {
 		return nil, err

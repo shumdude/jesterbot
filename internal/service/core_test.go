@@ -1,7 +1,13 @@
+// AI-AGENT: Unit tests and memory repository for core daily-planning service behavior.
+// Entry points are Test* functions plus seedUser, seedActivities, and memoryRepo helpers.
+// Tightly coupled to core.go and one_off_test.go, which reuses this memory repository.
+// Keep seedUser timing neutral unless a test explicitly needs morning or day-end boundaries.
+//
 package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -77,6 +83,64 @@ func TestReminderCycleAvoidsRepeatsBeforeReset(t *testing.T) {
 	}
 	if item == nil {
 		t.Fatal("expected reminder item")
+	}
+}
+
+func TestStartMorningPlanUsesMorningAsNewDayBoundary(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+
+	user := seedUser(repo)
+	user.UTCOffsetMinutes = 300
+	user.MorningTime = "10:30"
+	user.DayEndTime = "23:00"
+	repo.users[user.ID] = user
+	seedActivities(repo, user.ID, "Stretch")
+
+	yesterdayMorning := time.Date(2026, 4, 5, 5, 30, 0, 0, time.UTC) // local 2026-04-05 10:30
+	yesterdayPlan, err := svc.StartMorningPlan(context.Background(), user.ID, yesterdayMorning)
+	if err != nil {
+		t.Fatalf("start yesterday morning plan: %v", err)
+	}
+	if yesterdayPlan.DayLocal != "2026-04-05" {
+		t.Fatalf("unexpected yesterday logical day: %s", yesterdayPlan.DayLocal)
+	}
+
+	todayLateMorning := time.Date(2026, 4, 6, 6, 30, 0, 0, time.UTC) // local 2026-04-06 11:30
+	todayPlan, err := svc.StartMorningPlan(context.Background(), user.ID, todayLateMorning)
+	if err != nil {
+		t.Fatalf("start today morning plan: %v", err)
+	}
+	if todayPlan.DayLocal != "2026-04-06" {
+		t.Fatalf("expected new logical day after morning, got %s", todayPlan.DayLocal)
+	}
+	if todayPlan.ID == yesterdayPlan.ID {
+		t.Fatal("expected a new plan after the next morning")
+	}
+}
+
+func TestPickReminderDoesNotSendAfterDayEnd(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+
+	user := seedUser(repo)
+	user.UTCOffsetMinutes = 300
+	user.MorningTime = "10:30"
+	user.DayEndTime = "23:00"
+	repo.users[user.ID] = user
+	seedActivities(repo, user.ID, "Stretch")
+
+	startedAt := time.Date(2026, 4, 6, 5, 30, 0, 0, time.UTC) // local 10:30
+	if _, err := svc.StartMorningPlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("start morning plan: %v", err)
+	}
+	if _, err := svc.FinalizePlan(context.Background(), user.ID, startedAt); err != nil {
+		t.Fatalf("finalize plan: %v", err)
+	}
+
+	afterDayEnd := time.Date(2026, 4, 6, 18, 30, 0, 0, time.UTC) // local 23:30
+	if _, _, err := svc.PickReminder(context.Background(), user.ID, afterDayEnd); !errors.Is(err, domain.ErrPlanNotReady) {
+		t.Fatalf("expected no reminder after day end, got %v", err)
 	}
 }
 
@@ -402,7 +466,7 @@ func TestSetActivityTimesPerDayUsesLogicalDayBoundary(t *testing.T) {
 	svc := New(repo, 30)
 
 	user := seedUser(repo)
-	user.DayEndTime = "03:00"
+	user.MorningTime = "03:00"
 	repo.users[user.ID] = user
 	activities := seedActivities(repo, user.ID, "Stretch")
 
@@ -536,70 +600,132 @@ func TestIsInReminderWindow(t *testing.T) {
 	}
 }
 
-func TestLocalDayUsesConfiguredDayEnd(t *testing.T) {
+func TestLogicalDayUsesConfiguredMorningTime(t *testing.T) {
 	tests := []struct {
 		name      string
 		now       time.Time
 		offsetMin int
-		dayEnd    string
+		morning   string
 		wantDay   string
 	}{
 		{
-			name:      "default day end at midnight keeps current day",
+			name:      "midnight morning keeps current day",
 			now:       time.Date(2026, 4, 6, 0, 30, 0, 0, time.UTC),
 			offsetMin: 0,
-			dayEnd:    "00:00",
+			morning:   "00:00",
 			wantDay:   "2026-04-06",
 		},
 		{
-			name:      "before day end belongs to previous day",
-			now:       time.Date(2026, 4, 6, 1, 59, 0, 0, time.UTC),
+			name:      "before morning belongs to previous day",
+			now:       time.Date(2026, 4, 6, 7, 59, 0, 0, time.UTC),
 			offsetMin: 0,
-			dayEnd:    "02:00",
+			morning:   "08:00",
 			wantDay:   "2026-04-05",
 		},
 		{
-			name:      "at day end switches to current day",
-			now:       time.Date(2026, 4, 6, 2, 0, 0, 0, time.UTC),
+			name:      "at morning switches to current day",
+			now:       time.Date(2026, 4, 6, 8, 0, 0, 0, time.UTC),
 			offsetMin: 0,
-			dayEnd:    "02:00",
+			morning:   "08:00",
 			wantDay:   "2026-04-06",
 		},
 		{
-			name:      "applies user utc offset before day end check",
-			now:       time.Date(2026, 4, 5, 23, 30, 0, 0, time.UTC), // local 02:30 at UTC+03
-			offsetMin: 180,
-			dayEnd:    "03:00",
-			wantDay:   "2026-04-05",
+			name:      "applies user utc offset before morning check",
+			now:       time.Date(2026, 4, 6, 6, 30, 0, 0, time.UTC), // local 11:30 at UTC+05
+			offsetMin: 300,
+			morning:   "10:30",
+			wantDay:   "2026-04-06",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := localDay(tt.now, tt.offsetMin, tt.dayEnd)
+			got := LogicalDay(tt.now, tt.offsetMin, tt.morning)
 			if got != tt.wantDay {
-				t.Fatalf("localDay() = %s, want %s", got, tt.wantDay)
+				t.Fatalf("LogicalDay() = %s, want %s", got, tt.wantDay)
 			}
 		})
 	}
 }
 
-func TestFinishDayPausesNotificationsUntilNextLogicalDay(t *testing.T) {
+func TestNotificationQuietHours(t *testing.T) {
+	tests := []struct {
+		name      string
+		now       time.Time
+		offsetMin int
+		morning   string
+		dayEnd    string
+		want      bool
+	}{
+		{
+			name:      "after day end before midnight is quiet",
+			now:       time.Date(2026, 4, 6, 18, 30, 0, 0, time.UTC), // local 23:30 at UTC+05
+			offsetMin: 300,
+			morning:   "10:30",
+			dayEnd:    "23:00",
+			want:      true,
+		},
+		{
+			name:      "after midnight before morning is quiet",
+			now:       time.Date(2026, 4, 6, 19, 0, 0, 0, time.UTC), // local 00:00 at UTC+05
+			offsetMin: 300,
+			morning:   "10:30",
+			dayEnd:    "23:00",
+			want:      true,
+		},
+		{
+			name:      "at morning is not quiet",
+			now:       time.Date(2026, 4, 6, 5, 30, 0, 0, time.UTC), // local 10:30 at UTC+05
+			offsetMin: 300,
+			morning:   "10:30",
+			dayEnd:    "23:00",
+			want:      false,
+		},
+		{
+			name:      "before day end is not quiet",
+			now:       time.Date(2026, 4, 6, 17, 59, 0, 0, time.UTC), // local 22:59 at UTC+05
+			offsetMin: 300,
+			morning:   "10:30",
+			dayEnd:    "23:00",
+			want:      false,
+		},
+		{
+			name:      "same-day quiet window is supported",
+			now:       time.Date(2026, 4, 6, 4, 0, 0, 0, time.UTC),
+			offsetMin: 0,
+			morning:   "08:00",
+			dayEnd:    "02:00",
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := InNotificationQuietHours(tt.now, tt.offsetMin, tt.morning, tt.dayEnd)
+			if got != tt.want {
+				t.Fatalf("InNotificationQuietHours() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFinishDayPausesNotificationsUntilNextMorning(t *testing.T) {
 	repo := newMemoryRepo()
 	svc := New(repo, 30)
 	user := seedUser(repo)
 
-	user.DayEndTime = "03:00"
-	user.UTCOffsetMinutes = 180
+	user.MorningTime = "10:30"
+	user.DayEndTime = "23:00"
+	user.UTCOffsetMinutes = 300
 	repo.users[user.ID] = user
 
-	now := time.Date(2026, 4, 6, 21, 30, 0, 0, time.UTC) // local 2026-04-07 00:30
+	now := time.Date(2026, 4, 6, 18, 30, 0, 0, time.UTC) // local 2026-04-06 23:30
 	pausedUntil, err := svc.FinishDay(context.Background(), user.ID, now)
 	if err != nil {
 		t.Fatalf("finish day: %v", err)
 	}
 
-	want := time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC) // local 03:00
+	want := time.Date(2026, 4, 7, 5, 30, 0, 0, time.UTC) // local 10:30
 	if !pausedUntil.Equal(want) {
 		t.Fatalf("unexpected pause until: got %v want %v", pausedUntil, want)
 	}
@@ -613,45 +739,45 @@ func TestFinishDayPausesNotificationsUntilNextLogicalDay(t *testing.T) {
 	}
 }
 
-func TestNextLogicalDayStartUTC(t *testing.T) {
+func TestNextMorningStartUTC(t *testing.T) {
 	tests := []struct {
 		name      string
 		now       time.Time
 		offsetMin int
-		dayEnd    string
+		morning   string
 		want      time.Time
 	}{
 		{
-			name:      "before day end points to same local date boundary",
-			now:       time.Date(2026, 4, 6, 1, 59, 0, 0, time.UTC),
+			name:      "before morning points to same local date boundary",
+			now:       time.Date(2026, 4, 6, 7, 59, 0, 0, time.UTC),
 			offsetMin: 0,
-			dayEnd:    "02:00",
-			want:      time.Date(2026, 4, 6, 2, 0, 0, 0, time.UTC),
+			morning:   "08:00",
+			want:      time.Date(2026, 4, 6, 8, 0, 0, 0, time.UTC),
 		},
 		{
-			name:      "at day end points to next day boundary",
-			now:       time.Date(2026, 4, 6, 2, 0, 0, 0, time.UTC),
+			name:      "at morning points to next day boundary",
+			now:       time.Date(2026, 4, 6, 8, 0, 0, 0, time.UTC),
 			offsetMin: 0,
-			dayEnd:    "02:00",
-			want:      time.Date(2026, 4, 7, 2, 0, 0, 0, time.UTC),
+			morning:   "08:00",
+			want:      time.Date(2026, 4, 7, 8, 0, 0, 0, time.UTC),
 		},
 		{
 			name:      "respects positive utc offset",
-			now:       time.Date(2026, 4, 6, 21, 30, 0, 0, time.UTC), // local 00:30
-			offsetMin: 180,
-			dayEnd:    "03:00",
-			want:      time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC), // local 03:00
+			now:       time.Date(2026, 4, 6, 18, 30, 0, 0, time.UTC), // local 23:30
+			offsetMin: 300,
+			morning:   "10:30",
+			want:      time.Date(2026, 4, 7, 5, 30, 0, 0, time.UTC), // local 10:30
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := nextLogicalDayStartUTC(tt.now, tt.offsetMin, tt.dayEnd)
+			got, err := nextMorningStartUTC(tt.now, tt.offsetMin, tt.morning)
 			if err != nil {
-				t.Fatalf("nextLogicalDayStartUTC() error: %v", err)
+				t.Fatalf("nextMorningStartUTC() error: %v", err)
 			}
 			if !got.Equal(tt.want) {
-				t.Fatalf("nextLogicalDayStartUTC() = %v, want %v", got, tt.want)
+				t.Fatalf("nextMorningStartUTC() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -879,7 +1005,7 @@ func seedUser(repo *memoryRepo) domain.User {
 		ChatID:                  10,
 		Name:                    "Alice",
 		UTCOffsetMinutes:        0,
-		MorningTime:             "08:00",
+		MorningTime:             "00:00",
 		DayEndTime:              "00:00",
 		ReminderIntervalMinutes: 30,
 		CreatedAt:               time.Now().UTC(),

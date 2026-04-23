@@ -1,3 +1,8 @@
+// AI-AGENT: Core daily-planning service logic for users, activities, day plans, and reminder selection.
+// Entry points are Service methods such as StartMorningPlan, PickReminder, FinishDay, and UpdateSettings.
+// Tightly coupled to internal/domain types, Repository, one_off.go, and telegram scheduler behavior.
+// Change logical-day or quiet-hour helpers with extra care because stored plan keys and reminders depend on them.
+//
 package service
 
 import (
@@ -90,7 +95,7 @@ func (s *Service) FinishDay(ctx context.Context, userID int64, now time.Time) (t
 		return time.Time{}, err
 	}
 
-	pausedUntil, err := nextLogicalDayStartUTC(now, user.UTCOffsetMinutes, user.DayEndTime)
+	pausedUntil, err := nextMorningStartUTC(now, user.UTCOffsetMinutes, user.MorningTime)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -206,9 +211,9 @@ func (s *Service) StartMorningPlan(ctx context.Context, userID int64, now time.T
 		return nil, err
 	}
 
-	// A plan is unique per user and local calendar day (based on user's UTC offset).
+	// A plan is unique per user and logical day, which starts at the user's morning time.
 	// Repeated morning ticks should reuse the same plan instead of creating duplicates.
-	dayLocal := localDay(now, user.UTCOffsetMinutes, user.DayEndTime)
+	dayLocal := LogicalDay(now, user.UTCOffsetMinutes, user.MorningTime)
 	if existing, err := s.repo.GetDayPlan(ctx, userID, dayLocal); err == nil {
 		return existing, nil
 	} else if err != domain.ErrNotFound {
@@ -346,6 +351,9 @@ func (s *Service) PickReminder(ctx context.Context, userID int64, now time.Time)
 		return nil, nil, err
 	}
 	if plan.Status != domain.PlanStatusActive {
+		return nil, nil, domain.ErrPlanNotReady
+	}
+	if InNotificationQuietHours(now, user.UTCOffsetMinutes, user.MorningTime, user.DayEndTime) {
 		return nil, nil, domain.ErrPlanNotReady
 	}
 
@@ -675,26 +683,45 @@ func NormalizeClock(input string) (string, error) {
 	return parsed.Format("15:04"), nil
 }
 
-func localDay(now time.Time, utcOffsetMinutes int, dayEndTime string) string {
-	// Persist day boundaries using user's logical local day.
+func LogicalDay(now time.Time, utcOffsetMinutes int, morningTime string) string {
 	local := now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute)
-	normalizedDayEndTime, err := NormalizeClock(dayEndTime)
+	normalizedMorningTime, err := NormalizeClock(morningTime)
 	if err != nil {
-		normalizedDayEndTime = defaultDayEndTime
+		normalizedMorningTime = "00:00"
 	}
-	if local.Format("15:04") < normalizedDayEndTime {
+	if local.Format("15:04") < normalizedMorningTime {
 		local = local.AddDate(0, 0, -1)
 	}
 	return local.Format("2006-01-02")
 }
 
-func nextLogicalDayStartUTC(now time.Time, utcOffsetMinutes int, dayEndTime string) (time.Time, error) {
+func InNotificationQuietHours(now time.Time, utcOffsetMinutes int, morningTime, dayEndTime string) bool {
+	normalizedMorningTime, err := NormalizeClock(morningTime)
+	if err != nil {
+		normalizedMorningTime = "00:00"
+	}
 	normalizedDayEndTime, err := NormalizeClock(dayEndTime)
 	if err != nil {
 		normalizedDayEndTime = defaultDayEndTime
 	}
+	if normalizedMorningTime == normalizedDayEndTime {
+		return false
+	}
 
-	dayEndClock, err := time.Parse("15:04", normalizedDayEndTime)
+	clock := localClockHHMM(now, utcOffsetMinutes)
+	if normalizedDayEndTime < normalizedMorningTime {
+		return clock >= normalizedDayEndTime && clock < normalizedMorningTime
+	}
+	return clock >= normalizedDayEndTime || clock < normalizedMorningTime
+}
+
+func nextMorningStartUTC(now time.Time, utcOffsetMinutes int, morningTime string) (time.Time, error) {
+	normalizedMorningTime, err := NormalizeClock(morningTime)
+	if err != nil {
+		normalizedMorningTime = "00:00"
+	}
+
+	morningClock, err := time.Parse("15:04", normalizedMorningTime)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -704,8 +731,8 @@ func nextLogicalDayStartUTC(now time.Time, utcOffsetMinutes int, dayEndTime stri
 		localNow.Year(),
 		localNow.Month(),
 		localNow.Day(),
-		dayEndClock.Hour(),
-		dayEndClock.Minute(),
+		morningClock.Hour(),
+		morningClock.Minute(),
 		0,
 		0,
 		time.UTC,
@@ -747,7 +774,7 @@ func (s *Service) loadTodayPlan(ctx context.Context, userID int64, now time.Time
 		return nil, nil, err
 	}
 
-	plan, err := s.repo.GetDayPlan(ctx, userID, localDay(now, user.UTCOffsetMinutes, user.DayEndTime))
+	plan, err := s.repo.GetDayPlan(ctx, userID, LogicalDay(now, user.UTCOffsetMinutes, user.MorningTime))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -789,7 +816,7 @@ func (s *Service) syncTodayPlanTimesPerDay(ctx context.Context, userID, activity
 		return err
 	}
 
-	plan, err := s.repo.GetDayPlan(ctx, userID, localDay(now, user.UTCOffsetMinutes, user.DayEndTime))
+	plan, err := s.repo.GetDayPlan(ctx, userID, LogicalDay(now, user.UTCOffsetMinutes, user.MorningTime))
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil
 	}
