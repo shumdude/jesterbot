@@ -1,7 +1,13 @@
+// AI-AGENT: Unit tests for one-off task creation, completion, reminder priority, and quiet-hour suppression.
+// Entry points are Test* functions that reuse memoryRepo and seed helpers from core_test.go.
+// Tightly coupled to one_off.go, core.go quiet-hour helpers, and domain one-off task types.
+// Keep due-time setup explicit so priority and quiet-hour cases stay deterministic.
+//
 package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -76,6 +82,33 @@ func TestPickOneOffReminderPrefersHigherPriority(t *testing.T) {
 	}
 	if reminder.NextReminderAt == nil || !reminder.NextReminderAt.Equal(now.Add(10*time.Minute)) {
 		t.Fatalf("unexpected next reminder: %v", reminder.NextReminderAt)
+	}
+}
+
+func TestPickOneOffReminderDoesNotSendAfterDayEnd(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	now := time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := seedUser(repo)
+	user.UTCOffsetMinutes = 300
+	user.MorningTime = "10:30"
+	user.DayEndTime = "23:00"
+	repo.users[user.ID] = user
+
+	task, err := svc.CreateOneOffTask(context.Background(), user.ID, "Pay bill", domain.OneOffTaskPriorityHigh, nil)
+	if err != nil {
+		t.Fatalf("create high-priority task: %v", err)
+	}
+	dueAt := time.Date(2026, 4, 6, 18, 30, 0, 0, time.UTC) // local 23:30
+	task.NextReminderAt = &dueAt
+	if err := repo.SaveOneOffTask(context.Background(), task); err != nil {
+		t.Fatalf("save high-priority task: %v", err)
+	}
+
+	if _, err := svc.PickOneOffReminder(context.Background(), user.ID, dueAt); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected no one-off reminder after day end, got %v", err)
 	}
 }
 

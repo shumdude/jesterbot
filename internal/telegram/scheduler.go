@@ -1,3 +1,8 @@
+// AI-AGENT: Telegram scheduler loop for morning plans, daily reminders, one-off reminders, and reminder cleanup.
+// Entry point is Scheduler.Start, which calls runTick on a fixed one-minute cadence.
+// Tightly coupled to service.Service timing helpers and Notifier message tracking.
+// Be careful changing ordering in runTick because quiet hours must suppress all reminders but not stale cleanup.
+//
 package telegram
 
 import (
@@ -70,12 +75,15 @@ func (s *Scheduler) runTick(ctx context.Context) {
 			continue
 		}
 
-		currentDayLocal := logicalDayForUser(now, user.UTCOffsetMinutes, user.DayEndTime)
+		currentDayLocal := service.LogicalDay(now, user.UTCOffsetMinutes, user.MorningTime)
 		s.cleanupPreviousReminderMessages(ctx, user, currentDayLocal)
 		if notificationsPaused(user, now) {
 			continue
 		}
 
+		if service.InNotificationQuietHours(now, user.UTCOffsetMinutes, user.MorningTime, user.DayEndTime) {
+			continue
+		}
 		s.handleMorning(ctx, user, now)
 		s.handleReminder(ctx, user, now)
 		s.handleOneOffReminder(ctx, user, now, currentDayLocal)
@@ -206,18 +214,6 @@ func notificationsPaused(user domain.User, now time.Time) bool {
 		return false
 	}
 	return user.NotificationsPausedUntil.After(now.UTC())
-}
-
-func logicalDayForUser(now time.Time, utcOffsetMinutes int, dayEndTime string) string {
-	local := now.UTC().Add(time.Duration(utcOffsetMinutes) * time.Minute)
-	normalizedDayEndTime, err := service.NormalizeClock(dayEndTime)
-	if err != nil {
-		normalizedDayEndTime = "00:00"
-	}
-	if local.Format("15:04") < normalizedDayEndTime {
-		local = local.AddDate(0, 0, -1)
-	}
-	return local.Format("2006-01-02")
 }
 
 func (s *Scheduler) shouldProcessUser(userID int64, now time.Time, tickIntervalMinutes int) bool {
