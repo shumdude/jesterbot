@@ -82,8 +82,15 @@ func registerShowIf(eng *tgamlengine.Engine, svc *service.Service) {
 		if sess == nil {
 			return false
 		}
-		_, err := svc.FindUserByTelegramID(context.Background(), sess.UserID)
-		return err == nil
+		user, err := svc.FindUserByTelegramID(context.Background(), sess.UserID)
+		if err != nil {
+			return false
+		}
+		balance, err := svc.UserDoubloonsBalance(context.Background(), user.ID, time.Now().UTC())
+		if err == nil {
+			_ = sess.SetStr(constants.NSRegistration, constants.KeyName, fmt.Sprint(balance))
+		}
+		return true
 	}
 
 	eng.RegisterShowIf(constants.ShowIfRegistered, registered)

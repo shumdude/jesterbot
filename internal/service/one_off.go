@@ -7,6 +7,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,8 @@ const (
 	defaultOneOffLowPriorityMinutes    = 720
 	defaultOneOffMediumPriorityMinutes = 180
 	defaultOneOffHighPriorityMinutes   = 60
+	defaultOneOffRewardDoubloons       = 1
+	minOneOffRewardDoubloons           = 1
 )
 
 func (s *Service) GetOneOffReminderSettings(ctx context.Context, userID int64) (*domain.OneOffReminderSettings, error) {
@@ -47,6 +50,10 @@ func (s *Service) UpdateOneOffReminderSettings(ctx context.Context, userID int64
 }
 
 func (s *Service) CreateOneOffTask(ctx context.Context, userID int64, title string, priority domain.OneOffTaskPriority, checklistTitles []string) (*domain.OneOffTask, error) {
+	return s.CreateOneOffTaskWithReward(ctx, userID, title, priority, defaultOneOffRewardDoubloons, checklistTitles)
+}
+
+func (s *Service) CreateOneOffTaskWithReward(ctx context.Context, userID int64, title string, priority domain.OneOffTaskPriority, rewardDoubloons int, checklistTitles []string) (*domain.OneOffTask, error) {
 	cleanTitle := strings.TrimSpace(title)
 	if cleanTitle == "" {
 		return nil, domain.ErrEmptyTitle
@@ -64,12 +71,13 @@ func (s *Service) CreateOneOffTask(ctx context.Context, userID int64, title stri
 
 	now := s.now().UTC()
 	task := &domain.OneOffTask{
-		UserID:    userID,
-		Title:     cleanTitle,
-		Priority:  normalizedPriority,
-		Status:    domain.OneOffTaskStatusActive,
-		CreatedAt: now,
-		UpdatedAt: now,
+		UserID:          userID,
+		Title:           cleanTitle,
+		Priority:        normalizedPriority,
+		Status:          domain.OneOffTaskStatusActive,
+		RewardDoubloons: normalizedOneOffRewardDoubloons(rewardDoubloons),
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	nextReminder := now.Add(time.Duration(oneOffReminderIntervalMinutes(settings, normalizedPriority)) * time.Minute)
@@ -181,6 +189,9 @@ func (s *Service) CompleteOneOffTask(ctx context.Context, userID, taskID int64, 
 	if err := s.repo.SaveOneOffTask(ctx, task); err != nil {
 		return nil, err
 	}
+	if _, err := s.repo.AddUserDoubloons(ctx, userID, normalizedOneOffRewardDoubloons(task.RewardDoubloons)); err != nil {
+		return nil, err
+	}
 
 	return task, nil
 }
@@ -192,6 +203,9 @@ func (s *Service) PickOneOffReminder(ctx context.Context, userID int64, now time
 	}
 	if InNotificationQuietHours(now, user.UTCOffsetMinutes, user.MorningTime, user.DayEndTime) {
 		return nil, domain.ErrNotFound
+	}
+	if err := s.ensureOneOffReminderGap(ctx, user, now.UTC()); err != nil {
+		return nil, err
 	}
 
 	tasks, err := s.repo.ListOneOffTasks(ctx, userID)
@@ -219,6 +233,26 @@ func (s *Service) PickOneOffReminder(ctx context.Context, userID int64, now time
 	}
 
 	return task, nil
+}
+
+func (s *Service) ensureOneOffReminderGap(ctx context.Context, user *domain.User, now time.Time) error {
+	last, err := s.repo.GetLastReminderMessage(ctx, user.ID, domain.ReminderMessageKindOneOff)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	interval := user.ReminderIntervalMinutes
+	if interval <= 0 {
+		interval = s.defaultReminderMinutes
+	}
+	nextAllowed := last.SentAt.Add(time.Duration(interval) * time.Minute)
+	if nextAllowed.After(now) {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 func (s *Service) ensureOneOffReminderSettings(ctx context.Context, userID int64) (*domain.OneOffReminderSettings, error) {
@@ -330,6 +364,13 @@ func completeOneOffTask(task *domain.OneOffTask, stamp time.Time) {
 	task.CompletedAt = &stamp
 	task.NextReminderAt = nil
 	task.UpdatedAt = stamp
+}
+
+func normalizedOneOffRewardDoubloons(reward int) int {
+	if reward < minOneOffRewardDoubloons {
+		return defaultOneOffRewardDoubloons
+	}
+	return reward
 }
 
 func (s *Service) rescheduleActiveOneOffReminders(ctx context.Context, userID int64, settings *domain.OneOffReminderSettings, now time.Time) error {

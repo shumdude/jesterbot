@@ -112,6 +112,14 @@ func (r *menuMarkupRepo) UpdateUserNotificationsPausedUntil(context.Context, int
 	return nil
 }
 
+func (r *menuMarkupRepo) UpdateUserDoubloonsBalance(context.Context, int64, int) error {
+	return nil
+}
+
+func (r *menuMarkupRepo) AddUserDoubloons(context.Context, int64, int) (int, error) {
+	return 0, nil
+}
+
 func (r *menuMarkupRepo) GetUserTickInterval(context.Context, int64) (int, error) {
 	return 1, nil
 }
@@ -129,6 +137,10 @@ func (r *menuMarkupRepo) UpdateActivity(context.Context, int64, int64, string) e
 }
 
 func (r *menuMarkupRepo) UpdateActivityTimesPerDay(context.Context, int64, int64, int) error {
+	return nil
+}
+
+func (r *menuMarkupRepo) UpdateActivityRewardDoubloons(context.Context, int64, int64, int) error {
 	return nil
 }
 
@@ -180,8 +192,32 @@ func (r *menuMarkupRepo) DeleteOneOffTask(context.Context, int64, int64) error {
 	return nil
 }
 
+func (r *menuMarkupRepo) CreateShopItem(context.Context, *domain.ShopItem) error {
+	return nil
+}
+
+func (r *menuMarkupRepo) UpdateShopItem(context.Context, int64, int64, string, int) error {
+	return nil
+}
+
+func (r *menuMarkupRepo) DeleteShopItem(context.Context, int64, int64) error {
+	return nil
+}
+
+func (r *menuMarkupRepo) GetShopItem(context.Context, int64, int64) (*domain.ShopItem, error) {
+	return nil, domain.ErrNotFound
+}
+
+func (r *menuMarkupRepo) ListShopItems(context.Context, int64) ([]domain.ShopItem, error) {
+	return nil, nil
+}
+
 func (r *menuMarkupRepo) SaveReminderMessage(context.Context, *domain.ReminderMessage) error {
 	return nil
+}
+
+func (r *menuMarkupRepo) GetLastReminderMessage(context.Context, int64, domain.ReminderMessageKind) (*domain.ReminderMessage, error) {
+	return nil, domain.ErrNotFound
 }
 
 func (r *menuMarkupRepo) ListReminderMessagesBeforeDay(context.Context, int64, string) ([]domain.ReminderMessage, error) {

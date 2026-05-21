@@ -103,8 +103,8 @@ func (r *Controller) handleOneOffCallback(ctx context.Context, _ *bot.Bot, updat
 			return
 		}
 		_ = sess.SetStr(constants.NSOneOff, constants.KeyPriority, string(priority))
-		_ = sess.Transition(ctx, constants.SceneAddOneOffItems)
-		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_items"), r.sceneKeyboardMarkup("oneoff_items_back_menu", userID, chatID))
+		_ = sess.Transition(ctx, constants.SceneAddOneOffReward)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("oneoff_prompt_reward"), r.sceneKeyboardMarkup("oneoff_reward_back_menu", userID, chatID))
 	}
 }
 
@@ -181,6 +181,18 @@ func parseOneOffReminderSettingsInput(input string) (int, int, int, error) {
 	}
 
 	return values[0], values[1], values[2], nil
+}
+
+func parseOneOffRewardInput(input string) (int, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" || trimmed == "-" {
+		return 1, nil
+	}
+	reward, err := strconv.Atoi(trimmed)
+	if err != nil || reward < 1 {
+		return 0, fmt.Errorf("invalid one-off reward: %s", input)
+	}
+	return reward, nil
 }
 
 func parseOneOffReminderIntervalMinutes(input string) (int, error) {
@@ -276,6 +288,7 @@ func oneOffTaskDetailText(task *domain.OneOffTask) string {
 	lines := []string{
 		tr("oneoff_detail_title", oneOffPriorityIcon(task.Priority), task.Title),
 		tr("oneoff_detail_status", oneOffStatusLabel(task.Status)),
+		tr("oneoff_detail_reward", normalizedOneOffReward(task.RewardDoubloons)),
 		tr("oneoff_detail_items", oneOffChecklistSummary(*task)),
 	}
 	if task.NextReminderAt != nil && task.Status == domain.OneOffTaskStatusActive {
@@ -293,6 +306,13 @@ func oneOffTaskDetailText(task *domain.OneOffTask) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func normalizedOneOffReward(reward int) int {
+	if reward < 1 {
+		return 1
+	}
+	return reward
 }
 
 func oneOffReminderText(task *domain.OneOffTask) string {

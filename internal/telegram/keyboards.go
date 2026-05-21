@@ -34,12 +34,41 @@ func buildActivityDetailKeyboard(activity domain.Activity, page int) models.Repl
 	if timesPerDay < 1 {
 		timesPerDay = 1
 	}
+	reward := activity.RewardDoubloons
+	if reward < 1 {
+		reward = 1
+	}
 
 	rows := [][]models.InlineKeyboardButton{
 		{{Text: tr("button_activity_times", timesPerDay), CallbackData: fmt.Sprintf("activity:times:%d:%d", activity.ID, page)}},
 		{{Text: activityWindowButton(activity), CallbackData: fmt.Sprintf("activity:window:%d:%d", activity.ID, page)}},
+		{{Text: tr("button_activity_reward", reward), CallbackData: fmt.Sprintf("activity:reward:%d:%d", activity.ID, page)}},
 		{{Text: tr("button_delete"), CallbackData: fmt.Sprintf("activity:delete:%d:%d", activity.ID, page)}},
 		{{Text: tr("button_back_to_list"), CallbackData: fmt.Sprintf("activity:list:%d", page)}},
+		mainMenuBackRow(),
+	}
+
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func buildActivityRewardKeyboard(activityID int64, page, reward int) models.ReplyMarkup {
+	if reward < 1 {
+		reward = 1
+	}
+
+	decreased := reward - 1
+	if decreased < 1 {
+		decreased = 1
+	}
+	increased := reward + 1
+
+	rows := [][]models.InlineKeyboardButton{
+		{
+			{Text: tr("button_activity_reward_decrease"), CallbackData: fmt.Sprintf("activity:reward:set:%d:%d:%d", activityID, page, decreased)},
+			{Text: tr("button_activity_reward_increase"), CallbackData: fmt.Sprintf("activity:reward:set:%d:%d:%d", activityID, page, increased)},
+		},
+		{{Text: tr("button_activity_reward_confirm"), CallbackData: fmt.Sprintf("activity:reward:confirm:%d:%d:%d", activityID, page, reward)}},
+		{{Text: tr("button_back"), CallbackData: fmt.Sprintf("activity:open:%d:%d", activityID, page)}},
 		mainMenuBackRow(),
 	}
 
@@ -106,7 +135,7 @@ func buildProgressKeyboard(plan *domain.DayPlan) models.ReplyMarkup {
 func buildProgressKeyboardPage(plan *domain.DayPlan, page, pageSize int) models.ReplyMarkup {
 	selectedItems := make([]domain.DayPlanItem, 0, len(plan.Items))
 	for _, item := range plan.Items {
-		if item.Selected {
+		if item.Selected && !item.Completed {
 			selectedItems = append(selectedItems, item)
 		}
 	}
@@ -133,6 +162,41 @@ func buildProgressKeyboardPage(plan *domain.DayPlan, page, pageSize int) models.
 	if paginationRow := buildPaginationRow("plan:page", view.Page, view.TotalPages); len(paginationRow) > 0 {
 		rows = append(rows, paginationRow)
 	}
+	rows = append(rows, mainMenuBackRow())
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func buildShopKeyboardPage(items []domain.ShopItem, page, pageSize int) models.ReplyMarkup {
+	view := paginate(items, page, pageSize)
+	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+3)
+	for _, item := range view.Items {
+		rows = append(rows, []models.InlineKeyboardButton{
+			{Text: tr("button_shop_buy", item.Title, item.Cost), CallbackData: fmt.Sprintf("shop:buy:%d:%d", item.ID, view.Page)},
+		})
+	}
+	if paginationRow := buildPaginationRow("shop:page", view.Page, view.TotalPages); len(paginationRow) > 0 {
+		rows = append(rows, paginationRow)
+	}
+	rows = append(rows, []models.InlineKeyboardButton{{Text: tr("button_shop_edit"), CallbackData: fmt.Sprintf("shop:editmode:%d", view.Page)}})
+	rows = append(rows, mainMenuBackRow())
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func buildShopEditKeyboardPage(items []domain.ShopItem, page, pageSize int) models.ReplyMarkup {
+	view := paginate(items, page, pageSize)
+	rows := make([][]models.InlineKeyboardButton, 0, len(view.Items)+4)
+	for _, item := range view.Items {
+		rows = append(rows, []models.InlineKeyboardButton{
+			{Text: tr("button_shop_item", item.Title, item.Cost), CallbackData: noopCallbackData},
+			{Text: tr("button_shop_edit_icon"), CallbackData: fmt.Sprintf("shop:edit:%d:%d", item.ID, view.Page)},
+			{Text: tr("button_delete_icon"), CallbackData: fmt.Sprintf("shop:delete:%d:%d", item.ID, view.Page)},
+		})
+	}
+	if paginationRow := buildPaginationRow("shop:editpage", view.Page, view.TotalPages); len(paginationRow) > 0 {
+		rows = append(rows, paginationRow)
+	}
+	rows = append(rows, []models.InlineKeyboardButton{{Text: tr("button_shop_add"), CallbackData: "shop:add"}})
+	rows = append(rows, []models.InlineKeyboardButton{{Text: tr("button_back_to_shop"), CallbackData: fmt.Sprintf("shop:page:%d", view.Page)}})
 	rows = append(rows, mainMenuBackRow())
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }

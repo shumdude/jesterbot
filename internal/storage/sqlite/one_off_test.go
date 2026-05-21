@@ -61,13 +61,14 @@ func TestRepositoryOneOffTaskAndReminderSettingsRoundTrip(t *testing.T) {
 	}
 
 	task := &domain.OneOffTask{
-		UserID:         user.ID,
-		Title:          "Prepare release",
-		Priority:       domain.OneOffTaskPriorityHigh,
-		Status:         domain.OneOffTaskStatusActive,
-		NextReminderAt: ptrTime(now.Add(15 * time.Minute)),
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		UserID:          user.ID,
+		Title:           "Prepare release",
+		Priority:        domain.OneOffTaskPriorityHigh,
+		Status:          domain.OneOffTaskStatusActive,
+		RewardDoubloons: 7,
+		NextReminderAt:  ptrTime(now.Add(15 * time.Minute)),
+		CreatedAt:       now,
+		UpdatedAt:       now,
 		Items: []domain.OneOffTaskItem{
 			{Title: "Write changelog", SortOrder: 1, CreatedAt: now, UpdatedAt: now},
 			{Title: "Publish build", SortOrder: 2, CreatedAt: now, UpdatedAt: now},
@@ -83,6 +84,9 @@ func TestRepositoryOneOffTaskAndReminderSettingsRoundTrip(t *testing.T) {
 	}
 	if loadedTask.Title != task.Title || loadedTask.Priority != domain.OneOffTaskPriorityHigh {
 		t.Fatalf("unexpected loaded one-off task: %+v", loadedTask)
+	}
+	if loadedTask.RewardDoubloons != 7 {
+		t.Fatalf("unexpected loaded one-off reward: %d", loadedTask.RewardDoubloons)
 	}
 	if len(loadedTask.Items) != 2 {
 		t.Fatalf("unexpected loaded one-off items len: %d", len(loadedTask.Items))
@@ -101,6 +105,9 @@ func TestRepositoryOneOffTaskAndReminderSettingsRoundTrip(t *testing.T) {
 	}
 	if len(loadedTasks) != 1 || !loadedTasks[0].Items[0].Completed {
 		t.Fatalf("unexpected listed one-off tasks: %+v", loadedTasks)
+	}
+	if loadedTasks[0].RewardDoubloons != 7 {
+		t.Fatalf("unexpected listed one-off reward: %d", loadedTasks[0].RewardDoubloons)
 	}
 
 	if err := repo.DeleteOneOffTask(ctx, user.ID, task.ID); err != nil {

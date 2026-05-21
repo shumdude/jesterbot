@@ -45,7 +45,7 @@ func (r *Repository) SaveOneOffReminderSettings(ctx context.Context, settings *d
 
 func (r *Repository) GetOneOffTask(ctx context.Context, userID, taskID int64) (*domain.OneOffTask, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, title, priority, status, next_reminder_at, completed_at, created_at, updated_at
+		SELECT id, user_id, title, priority, status, reward_doubloons, next_reminder_at, completed_at, created_at, updated_at
 		FROM one_off_tasks
 		WHERE user_id = ? AND id = ?`,
 		userID,
@@ -68,7 +68,7 @@ func (r *Repository) GetOneOffTask(ctx context.Context, userID, taskID int64) (*
 
 func (r *Repository) ListOneOffTasks(ctx context.Context, userID int64) ([]domain.OneOffTask, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, title, priority, status, next_reminder_at, completed_at, created_at, updated_at
+		SELECT id, user_id, title, priority, status, reward_doubloons, next_reminder_at, completed_at, created_at, updated_at
 		FROM one_off_tasks
 		WHERE user_id = ?
 		ORDER BY
@@ -116,12 +116,13 @@ func (r *Repository) SaveOneOffTask(ctx context.Context, task *domain.OneOffTask
 	if task.ID == 0 {
 		result, execErr := tx.ExecContext(ctx, `
 			INSERT INTO one_off_tasks (
-				user_id, title, priority, status, next_reminder_at, completed_at, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				user_id, title, priority, status, reward_doubloons, next_reminder_at, completed_at, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			task.UserID,
 			task.Title,
 			string(task.Priority),
 			string(task.Status),
+			normalizedRewardDoubloons(task.RewardDoubloons),
 			formatNullableTime(task.NextReminderAt),
 			formatNullableTime(task.CompletedAt),
 			formatTime(task.CreatedAt),
@@ -140,11 +141,12 @@ func (r *Repository) SaveOneOffTask(ctx context.Context, task *domain.OneOffTask
 	} else {
 		_, err = tx.ExecContext(ctx, `
 			UPDATE one_off_tasks
-			SET title = ?, priority = ?, status = ?, next_reminder_at = ?, completed_at = ?, updated_at = ?
+			SET title = ?, priority = ?, status = ?, reward_doubloons = ?, next_reminder_at = ?, completed_at = ?, updated_at = ?
 			WHERE id = ? AND user_id = ?`,
 			task.Title,
 			string(task.Priority),
 			string(task.Status),
+			normalizedRewardDoubloons(task.RewardDoubloons),
 			formatNullableTime(task.NextReminderAt),
 			formatNullableTime(task.CompletedAt),
 			formatTime(task.UpdatedAt),
@@ -308,6 +310,7 @@ func scanOneOffTaskScanner(scanner interface{ Scan(dest ...any) error }) (*domai
 		&task.Title,
 		&priority,
 		&status,
+		&task.RewardDoubloons,
 		&nextReminderAt,
 		&completedAt,
 		&createdAt,
@@ -319,6 +322,7 @@ func scanOneOffTaskScanner(scanner interface{ Scan(dest ...any) error }) (*domai
 	var err error
 	task.Priority = domain.OneOffTaskPriority(priority)
 	task.Status = domain.OneOffTaskStatus(status)
+	task.RewardDoubloons = normalizedRewardDoubloons(task.RewardDoubloons)
 	task.NextReminderAt, err = parseNullableTime(nextReminderAt)
 	if err != nil {
 		return nil, err

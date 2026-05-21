@@ -2,7 +2,6 @@
 // Entry points are Test* functions plus seedUser, seedActivities, and memoryRepo helpers.
 // Tightly coupled to core.go and one_off_test.go, which reuses this memory repository.
 // Keep seedUser timing neutral unless a test explicitly needs morning or day-end boundaries.
-//
 package service
 
 import (
@@ -168,6 +167,86 @@ func TestMarkDoneCompletesPlan(t *testing.T) {
 	}
 	if plan.CompletedAt == nil {
 		t.Fatal("expected completion timestamp")
+	}
+}
+
+func TestMarkDoneAddsRewardDoubloonsForEachCompletion(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	now := time.Date(2026, 4, 6, 8, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := seedUser(repo)
+	activities := seedActivities(repo, user.ID, "Read")
+	if err := svc.SetActivityTimesPerDay(context.Background(), user.ID, activities[0].ID, 2); err != nil {
+		t.Fatalf("set times: %v", err)
+	}
+	if err := svc.SetActivityRewardDoubloons(context.Background(), user.ID, activities[0].ID, 3); err != nil {
+		t.Fatalf("set reward: %v", err)
+	}
+	if _, err := svc.StartMorningPlan(context.Background(), user.ID, now); err != nil {
+		t.Fatalf("start plan: %v", err)
+	}
+	if _, err := svc.FinalizePlan(context.Background(), user.ID, now); err != nil {
+		t.Fatalf("finalize plan: %v", err)
+	}
+
+	if _, err := svc.MarkActivityDone(context.Background(), user.ID, activities[0].ID, now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("mark first done: %v", err)
+	}
+	if _, err := svc.MarkActivityDone(context.Background(), user.ID, activities[0].ID, now.Add(10*time.Minute)); err != nil {
+		t.Fatalf("mark second done: %v", err)
+	}
+
+	updated, err := repo.GetUserByID(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if updated.DoubloonsBalance != 6 {
+		t.Fatalf("expected 6 doubloons, got %d", updated.DoubloonsBalance)
+	}
+}
+
+func TestFinishDayResetsDoubloons(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	user := seedUser(repo)
+	if _, err := repo.AddUserDoubloons(context.Background(), user.ID, 5); err != nil {
+		t.Fatalf("seed doubloons: %v", err)
+	}
+
+	if _, err := svc.FinishDay(context.Background(), user.ID, time.Date(2026, 4, 6, 20, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("finish day: %v", err)
+	}
+
+	updated, err := repo.GetUserByID(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if updated.DoubloonsBalance != 0 {
+		t.Fatalf("expected balance reset, got %d", updated.DoubloonsBalance)
+	}
+}
+
+func TestBuyShopItemDeductsDoubloons(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	user := seedUser(repo)
+	if _, err := repo.AddUserDoubloons(context.Background(), user.ID, 7); err != nil {
+		t.Fatalf("seed doubloons: %v", err)
+	}
+	item, err := svc.SaveShopItem(context.Background(), user.ID, 0, "Coffee", 3)
+	if err != nil {
+		t.Fatalf("save shop item: %v", err)
+	}
+
+	purchase, err := svc.BuyShopItem(context.Background(), user.ID, item.ID, time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("buy shop item: %v", err)
+	}
+
+	if purchase.Spent != 3 || purchase.Balance != 4 {
+		t.Fatalf("unexpected purchase: %+v", purchase)
 	}
 }
 
@@ -787,12 +866,14 @@ type memoryRepo struct {
 	nextUserID             int64
 	nextActivityID         int64
 	nextPlanID             int64
+	nextShopItemID         int64
 	nextOneOffTaskID       int64
 	nextOneOffTaskItemID   int64
 	users                  map[int64]domain.User
 	usersByTG              map[int64]int64
 	activities             map[int64][]domain.Activity
 	plans                  map[int64]map[string]domain.DayPlan
+	shopItems              map[int64]map[int64]domain.ShopItem
 	oneOffTasks            map[int64]map[int64]domain.OneOffTask
 	oneOffReminderSettings map[int64]domain.OneOffReminderSettings
 	userTickIntervals      map[int64]int
@@ -805,6 +886,7 @@ func newMemoryRepo() *memoryRepo {
 		usersByTG:              make(map[int64]int64),
 		activities:             make(map[int64][]domain.Activity),
 		plans:                  make(map[int64]map[string]domain.DayPlan),
+		shopItems:              make(map[int64]map[int64]domain.ShopItem),
 		oneOffTasks:            make(map[int64]map[int64]domain.OneOffTask),
 		oneOffReminderSettings: make(map[int64]domain.OneOffReminderSettings),
 		userTickIntervals:      make(map[int64]int),
@@ -867,6 +949,29 @@ func (m *memoryRepo) UpdateUserNotificationsPausedUntil(_ context.Context, userI
 	return nil
 }
 
+func (m *memoryRepo) UpdateUserDoubloonsBalance(_ context.Context, userID int64, balance int) error {
+	user, ok := m.users[userID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	user.DoubloonsBalance = balance
+	m.users[userID] = user
+	return nil
+}
+
+func (m *memoryRepo) AddUserDoubloons(_ context.Context, userID int64, delta int) (int, error) {
+	user, ok := m.users[userID]
+	if !ok {
+		return 0, domain.ErrNotFound
+	}
+	user.DoubloonsBalance += delta
+	if user.DoubloonsBalance < 0 {
+		return 0, errors.New("not enough doubloons")
+	}
+	m.users[userID] = user
+	return user.DoubloonsBalance, nil
+}
+
 func (m *memoryRepo) CreateActivity(_ context.Context, activity *domain.Activity) error {
 	m.nextActivityID++
 	activity.ID = m.nextActivityID
@@ -891,6 +996,18 @@ func (m *memoryRepo) UpdateActivityTimesPerDay(_ context.Context, userID, activi
 	for i := range activities {
 		if activities[i].ID == activityID {
 			activities[i].TimesPerDay = timesPerDay
+			m.activities[userID] = activities
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (m *memoryRepo) UpdateActivityRewardDoubloons(_ context.Context, userID, activityID int64, reward int) error {
+	activities := m.activities[userID]
+	for i := range activities {
+		if activities[i].ID == activityID {
+			activities[i].RewardDoubloons = reward
 			m.activities[userID] = activities
 			return nil
 		}
@@ -973,12 +1090,80 @@ func (m *memoryRepo) savePlan(plan *domain.DayPlan) error {
 	return nil
 }
 
+func (m *memoryRepo) CreateShopItem(_ context.Context, item *domain.ShopItem) error {
+	m.nextShopItemID++
+	item.ID = m.nextShopItemID
+	if m.shopItems[item.UserID] == nil {
+		m.shopItems[item.UserID] = make(map[int64]domain.ShopItem)
+	}
+	m.shopItems[item.UserID][item.ID] = *item
+	return nil
+}
+
+func (m *memoryRepo) UpdateShopItem(_ context.Context, userID, itemID int64, title string, cost int) error {
+	items := m.shopItems[userID]
+	item, ok := items[itemID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	item.Title = title
+	item.Cost = cost
+	items[itemID] = item
+	return nil
+}
+
+func (m *memoryRepo) DeleteShopItem(_ context.Context, userID, itemID int64) error {
+	items := m.shopItems[userID]
+	if _, ok := items[itemID]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(items, itemID)
+	return nil
+}
+
+func (m *memoryRepo) GetShopItem(_ context.Context, userID, itemID int64) (*domain.ShopItem, error) {
+	items := m.shopItems[userID]
+	item, ok := items[itemID]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	cloned := item
+	return &cloned, nil
+}
+
+func (m *memoryRepo) ListShopItems(_ context.Context, userID int64) ([]domain.ShopItem, error) {
+	itemsByID := m.shopItems[userID]
+	items := make([]domain.ShopItem, 0, len(itemsByID))
+	for _, item := range itemsByID {
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 func (m *memoryRepo) SaveReminderMessage(_ context.Context, message *domain.ReminderMessage) error {
 	if m.reminderMessages[message.UserID] == nil {
 		m.reminderMessages[message.UserID] = make(map[int]domain.ReminderMessage)
 	}
 	m.reminderMessages[message.UserID][message.MessageID] = *message
 	return nil
+}
+
+func (m *memoryRepo) GetLastReminderMessage(_ context.Context, userID int64, kind domain.ReminderMessageKind) (*domain.ReminderMessage, error) {
+	userMessages := m.reminderMessages[userID]
+	var latest *domain.ReminderMessage
+	for _, message := range userMessages {
+		if message.Kind != kind {
+			continue
+		}
+		if latest == nil || message.SentAt.After(latest.SentAt) {
+			copied := message
+			latest = &copied
+		}
+	}
+	if latest == nil {
+		return nil, domain.ErrNotFound
+	}
+	return latest, nil
 }
 
 func (m *memoryRepo) ListReminderMessagesBeforeDay(_ context.Context, userID int64, dayLocal string) ([]domain.ReminderMessage, error) {
@@ -1023,10 +1208,11 @@ func seedActivities(repo *memoryRepo, userID int64, titles ...string) []domain.A
 	for i, title := range titles {
 		repo.nextActivityID++
 		activity := domain.Activity{
-			ID:        repo.nextActivityID,
-			UserID:    userID,
-			Title:     title,
-			SortOrder: i + 1,
+			ID:              repo.nextActivityID,
+			UserID:          userID,
+			Title:           title,
+			SortOrder:       i + 1,
+			RewardDoubloons: 1,
 		}
 		repo.activities[userID] = append(repo.activities[userID], activity)
 		activities = append(activities, activity)

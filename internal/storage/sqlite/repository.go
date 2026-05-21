@@ -23,7 +23,7 @@ func NewRepository(db *sql.DB) *Repository {
 
 func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramUserID int64) (*domain.User, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, notifications_paused_until, reminder_interval_minutes, created_at, updated_at
+		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, notifications_paused_until, reminder_interval_minutes, doubloons_balance, created_at, updated_at
 		FROM users
 		WHERE telegram_user_id = ?`,
 		telegramUserID,
@@ -33,7 +33,7 @@ func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramUserID int
 
 func (r *Repository) GetUserByID(ctx context.Context, userID int64) (*domain.User, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, notifications_paused_until, reminder_interval_minutes, created_at, updated_at
+		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, notifications_paused_until, reminder_interval_minutes, doubloons_balance, created_at, updated_at
 		FROM users
 		WHERE id = ?`,
 		userID,
@@ -43,7 +43,7 @@ func (r *Repository) GetUserByID(ctx context.Context, userID int64) (*domain.Use
 
 func (r *Repository) ListUsers(ctx context.Context) ([]domain.User, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, notifications_paused_until, reminder_interval_minutes, created_at, updated_at
+		SELECT id, telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, notifications_paused_until, reminder_interval_minutes, doubloons_balance, created_at, updated_at
 		FROM users
 		ORDER BY id`)
 	if err != nil {
@@ -76,8 +76,8 @@ func (r *Repository) CreateUser(ctx context.Context, user *domain.User) error {
 
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO users (
-			telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, reminder_interval_minutes, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			telegram_user_id, chat_id, name, utc_offset_minutes, morning_time, day_end_time, reminder_interval_minutes, doubloons_balance, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		user.TelegramUserID,
 		user.ChatID,
 		user.Name,
@@ -85,6 +85,7 @@ func (r *Repository) CreateUser(ctx context.Context, user *domain.User) error {
 		user.MorningTime,
 		dayEndTime,
 		user.ReminderIntervalMinutes,
+		user.DoubloonsBalance,
 		formatTime(user.CreatedAt),
 		formatTime(user.UpdatedAt),
 	)
@@ -150,6 +151,84 @@ func (r *Repository) UpdateUserNotificationsPausedUntil(ctx context.Context, use
 	return nil
 }
 
+func (r *Repository) UpdateUserDoubloonsBalance(ctx context.Context, userID int64, balance int) error {
+	if balance < 0 {
+		return fmt.Errorf("doubloons balance must not be negative")
+	}
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE users
+		SET doubloons_balance = ?, updated_at = ?
+		WHERE id = ?`,
+		balance,
+		formatTime(time.Now().UTC()),
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update user doubloons balance: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("user doubloons rows affected: %w", err)
+	}
+	if affected == 0 {
+		return domain.ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *Repository) AddUserDoubloons(ctx context.Context, userID int64, delta int) (int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin add user doubloons: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var balance int
+	if err = tx.QueryRowContext(ctx, `
+		SELECT doubloons_balance
+		FROM users
+		WHERE id = ?`,
+		userID,
+	).Scan(&balance); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = domain.ErrNotFound
+			return 0, err
+		}
+		err = fmt.Errorf("get user doubloons balance: %w", err)
+		return 0, err
+	}
+
+	balance += delta
+	if balance < 0 {
+		err = fmt.Errorf("not enough doubloons")
+		return 0, err
+	}
+
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE users
+		SET doubloons_balance = ?, updated_at = ?
+		WHERE id = ?`,
+		balance,
+		formatTime(time.Now().UTC()),
+		userID,
+	); err != nil {
+		err = fmt.Errorf("update user doubloons balance: %w", err)
+		return 0, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit user doubloons balance: %w", err)
+	}
+
+	return balance, nil
+}
+
 func (r *Repository) CreateActivity(ctx context.Context, activity *domain.Activity) error {
 	windows := activity.ReminderWindows
 	if len(windows) == 0 && activity.ReminderWindowStart != "" && activity.ReminderWindowEnd != "" {
@@ -158,13 +237,15 @@ func (r *Repository) CreateActivity(ctx context.Context, activity *domain.Activi
 		}
 	}
 	windowStart, windowEnd := legacyReminderWindowColumns(windows)
+	rewardDoubloons := normalizedRewardDoubloons(activity.RewardDoubloons)
 	result, err := r.db.ExecContext(ctx, `
-		INSERT INTO activities (user_id, title, sort_order, times_per_day, reminder_window_start, reminder_window_end, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO activities (user_id, title, sort_order, times_per_day, reward_doubloons, reminder_window_start, reminder_window_end, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		activity.UserID,
 		activity.Title,
 		activity.SortOrder,
 		activity.TimesPerDay,
+		rewardDoubloons,
 		windowStart,
 		windowEnd,
 		formatTime(activity.CreatedAt),
@@ -181,6 +262,7 @@ func (r *Repository) CreateActivity(ctx context.Context, activity *domain.Activi
 	if err := r.replaceActivityReminderWindows(ctx, activity.ID, windows); err != nil {
 		return err
 	}
+	activity.RewardDoubloons = rewardDoubloons
 	activity.ReminderWindowStart, activity.ReminderWindowEnd = windowStart, windowEnd
 	activity.ReminderWindows = append([]domain.ReminderWindow(nil), windows...)
 
@@ -204,6 +286,31 @@ func (r *Repository) UpdateActivityTimesPerDay(ctx context.Context, userID, acti
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("activity times per day rows affected: %w", err)
+	}
+	if affected == 0 {
+		return domain.ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *Repository) UpdateActivityRewardDoubloons(ctx context.Context, userID, activityID int64, reward int) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE activities
+		SET reward_doubloons = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		reward,
+		formatTime(time.Now().UTC()),
+		activityID,
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update activity reward doubloons: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("activity reward rows affected: %w", err)
 	}
 	if affected == 0 {
 		return domain.ErrNotFound
@@ -319,7 +426,7 @@ func (r *Repository) UpdateActivityReminderWindows(ctx context.Context, userID, 
 
 func (r *Repository) ListActivities(ctx context.Context, userID int64) ([]domain.Activity, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, title, sort_order, times_per_day, reminder_window_start, reminder_window_end, created_at, updated_at
+		SELECT id, user_id, title, sort_order, times_per_day, reward_doubloons, reminder_window_start, reminder_window_end, created_at, updated_at
 		FROM activities
 		WHERE user_id = ?
 		ORDER BY sort_order, id`,
@@ -447,18 +554,20 @@ func (r *Repository) SaveDayPlan(ctx context.Context, plan *domain.DayPlan) erro
 
 	for i := range plan.Items {
 		item := &plan.Items[i]
+		item.RewardDoubloons = normalizedRewardDoubloons(item.RewardDoubloons)
 		// Rewrites existing (plan_id, activity_id) rows and inserts new ones.
 		// This keeps SaveDayPlan idempotent for repeated calls with same snapshot.
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO daily_plan_items (
-				plan_id, activity_id, title_snapshot, selected, completed, reminder_cycle, times_per_day, completed_count, completed_at, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				plan_id, activity_id, title_snapshot, selected, completed, reminder_cycle, times_per_day, reward_doubloons, completed_count, completed_at, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(plan_id, activity_id) DO UPDATE SET
 				title_snapshot = excluded.title_snapshot,
 				selected = excluded.selected,
 				completed = excluded.completed,
 				reminder_cycle = excluded.reminder_cycle,
 				times_per_day = excluded.times_per_day,
+				reward_doubloons = excluded.reward_doubloons,
 				completed_count = excluded.completed_count,
 				completed_at = excluded.completed_at,
 				updated_at = excluded.updated_at`,
@@ -469,6 +578,7 @@ func (r *Repository) SaveDayPlan(ctx context.Context, plan *domain.DayPlan) erro
 			boolToInt(item.Completed),
 			item.ReminderCycle,
 			item.TimesPerDay,
+			item.RewardDoubloons,
 			item.CompletedCount,
 			formatNullableTime(item.CompletedAt),
 			formatTime(item.CreatedAt),
@@ -531,7 +641,7 @@ func (r *Repository) ListPlans(ctx context.Context, userID int64) ([]domain.DayP
 
 func (r *Repository) loadPlanItems(ctx context.Context, planID int64) ([]domain.DayPlanItem, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, plan_id, activity_id, title_snapshot, selected, completed, reminder_cycle, times_per_day, completed_count, completed_at, created_at, updated_at
+		SELECT id, plan_id, activity_id, title_snapshot, selected, completed, reminder_cycle, times_per_day, reward_doubloons, completed_count, completed_at, created_at, updated_at
 		FROM daily_plan_items
 		WHERE plan_id = ?
 		ORDER BY id`,
@@ -589,6 +699,7 @@ func scanUserScanner(scanner interface{ Scan(dest ...any) error }) (*domain.User
 		&user.DayEndTime,
 		&notificationsPausedUntil,
 		&user.ReminderIntervalMinutes,
+		&user.DoubloonsBalance,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -623,6 +734,7 @@ func scanActivityRows(rows *sql.Rows) (*domain.Activity, error) {
 		&activity.Title,
 		&activity.SortOrder,
 		&activity.TimesPerDay,
+		&activity.RewardDoubloons,
 		&activity.ReminderWindowStart,
 		&activity.ReminderWindowEnd,
 		&createdAt,
@@ -729,6 +841,7 @@ func scanPlanItemRows(rows *sql.Rows) (*domain.DayPlanItem, error) {
 		&completed,
 		&item.ReminderCycle,
 		&item.TimesPerDay,
+		&item.RewardDoubloons,
 		&item.CompletedCount,
 		&completedAt,
 		&createdAt,
@@ -868,4 +981,11 @@ func legacyReminderWindowColumns(windows []domain.ReminderWindow) (string, strin
 		return "", ""
 	}
 	return windows[0].Start, windows[0].End
+}
+
+func normalizedRewardDoubloons(reward int) int {
+	if reward < 1 {
+		return 1
+	}
+	return reward
 }

@@ -15,22 +15,27 @@ keyboards:
         action: handler
         target: open_activities
         show_if: registered
-    - - id: oneoff
+    - - id: shop
+        text: buttons.shop
+        action: handler
+        target: open_shop
+        show_if: registered
+      - id: oneoff
         text: buttons.oneoff
         action: handler
         target: open_oneoff
         show_if: registered
-      - id: settings
+    - - id: settings
         text: buttons.settings
         action: handler
         target: open_settings
         show_if: registered
-    - - id: stats
+      - id: stats
         text: buttons.stats
         action: handler
         target: open_stats
         show_if: registered
-      - id: finish_day
+    - - id: finish_day
         text: buttons.finish_day
         action: handler
         target: finish_day
@@ -58,6 +63,15 @@ keyboards:
         text: buttons.back_to_menu
         action: goto
         target: menu
+  shop_back_menu:
+    - - id: back_to_shop
+        text: buttons.back
+        action: handler
+        target: open_shop
+      - id: back_to_menu
+        text: buttons.back_to_menu
+        action: goto
+        target: menu
   settings_back_menu:
     - - id: back_to_settings
         text: buttons.back
@@ -76,15 +90,24 @@ keyboards:
         text: buttons.back_to_menu
         action: goto
         target: menu
+  oneoff_reward_back_menu:
+    - - id: back_to_oneoff_priority
+        text: buttons.back
+        action: handler
+        target: back_oneoff_priority
+      - id: back_to_menu
+        text: buttons.back_to_menu
+        action: goto
+        target: menu
   oneoff_items_back_menu:
     - - id: oneoff_no_items
         text: buttons.oneoff_no_items
         action: handler
         target: oneoff_items_none
-    - - id: back_to_oneoff_priority
+    - - id: back_to_oneoff_reward
         text: buttons.back
         action: handler
-        target: back_oneoff_priority
+        target: back_oneoff_reward
       - id: back_to_menu
         text: buttons.back_to_menu
         action: goto

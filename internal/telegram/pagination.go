@@ -153,9 +153,17 @@ func parseTwoIDsPageCallback(data string) (int64, int64, int, error) {
 }
 
 func parseActivityTimesCallback(data, action string) (int64, int, int, error) {
+	return parseActivityValueCallback(data, "times", action)
+}
+
+func parseActivityRewardCallback(data, action string) (int64, int, int, error) {
+	return parseActivityValueCallback(data, "reward", action)
+}
+
+func parseActivityValueCallback(data, valueKind, action string) (int64, int, int, error) {
 	parts := strings.Split(data, ":")
-	if len(parts) != 6 || parts[0] != "activity" || parts[1] != "times" || parts[2] != action {
-		return 0, 0, 0, fmt.Errorf("invalid activity times callback: %s", data)
+	if len(parts) != 6 || parts[0] != "activity" || parts[1] != valueKind || parts[2] != action {
+		return 0, 0, 0, fmt.Errorf("invalid activity %s callback: %s", valueKind, data)
 	}
 
 	activityID, err := strconv.ParseInt(parts[3], 10, 64)

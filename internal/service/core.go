@@ -32,7 +32,11 @@ type Service struct {
 	now                    func() time.Time
 }
 
-const defaultDayEndTime = "00:00"
+const (
+	defaultDayEndTime     = "00:00"
+	defaultActivityReward = 1
+	minActivityReward     = 1
+)
 
 func New(repo Repository, defaultReminderMinutes int) *Service {
 	return &Service{
@@ -102,6 +106,9 @@ func (s *Service) FinishDay(ctx context.Context, userID int64, now time.Time) (t
 	if err := s.repo.UpdateUserNotificationsPausedUntil(ctx, userID, &pausedUntil); err != nil {
 		return time.Time{}, err
 	}
+	if err := s.repo.UpdateUserDoubloonsBalance(ctx, userID, 0); err != nil {
+		return time.Time{}, err
+	}
 
 	return pausedUntil, nil
 }
@@ -155,12 +162,13 @@ func (s *Service) AddActivities(ctx context.Context, userID int64, input string)
 	created := make([]domain.Activity, 0, len(titles))
 	for i, title := range titles {
 		activity := domain.Activity{
-			UserID:      userID,
-			Title:       title,
-			SortOrder:   len(existingActivities) + i + 1,
-			TimesPerDay: 1,
-			CreatedAt:   now,
-			UpdatedAt:   now,
+			UserID:          userID,
+			Title:           title,
+			SortOrder:       len(existingActivities) + i + 1,
+			TimesPerDay:     1,
+			RewardDoubloons: defaultActivityReward,
+			CreatedAt:       now,
+			UpdatedAt:       now,
 		}
 
 		if err := s.repo.CreateActivity(ctx, &activity); err != nil {
@@ -191,6 +199,17 @@ func (s *Service) SetActivityTimesPerDay(ctx context.Context, userID, activityID
 	}
 
 	return s.syncTodayPlanTimesPerDay(ctx, userID, activityID, times)
+}
+
+func (s *Service) SetActivityRewardDoubloons(ctx context.Context, userID, activityID int64, reward int) error {
+	if reward < minActivityReward {
+		return fmt.Errorf("reward must be at least %d", minActivityReward)
+	}
+	if err := s.repo.UpdateActivityRewardDoubloons(ctx, userID, activityID, reward); err != nil {
+		return err
+	}
+
+	return s.syncTodayPlanRewardDoubloons(ctx, userID, activityID, reward)
 }
 
 func (s *Service) SetActivityReminderWindows(ctx context.Context, userID, activityID int64, windows []domain.ReminderWindow) error {
@@ -246,13 +265,14 @@ func (s *Service) StartMorningPlan(ctx context.Context, userID int64, now time.T
 			timesPerDay = 1
 		}
 		plan.Items = append(plan.Items, domain.DayPlanItem{
-			ActivityID:    activity.ID,
-			TitleSnapshot: activity.Title,
-			Selected:      true,
-			Completed:     false,
-			TimesPerDay:   timesPerDay,
-			CreatedAt:     stamp,
-			UpdatedAt:     stamp,
+			ActivityID:      activity.ID,
+			TitleSnapshot:   activity.Title,
+			Selected:        true,
+			Completed:       false,
+			TimesPerDay:     timesPerDay,
+			RewardDoubloons: normalizedActivityReward(activity.RewardDoubloons),
+			CreatedAt:       stamp,
+			UpdatedAt:       stamp,
 		})
 	}
 
@@ -484,6 +504,9 @@ func (s *Service) MarkActivityDone(ctx context.Context, userID, activityID int64
 	if err != nil {
 		return nil, err
 	}
+	if err := s.resetDoubloonsIfPastDayEnd(ctx, user, now); err != nil {
+		return nil, err
+	}
 	if plan.Status == domain.PlanStatusCompleted {
 		return nil, domain.ErrPlanClosed
 	}
@@ -500,6 +523,9 @@ func (s *Service) MarkActivityDone(ctx context.Context, userID, activityID int64
 		plan.Items[i].CompletedCount++
 		plan.Items[i].UpdatedAt = stamp
 		plan.UpdatedAt = stamp
+		if _, err := s.repo.AddUserDoubloons(ctx, userID, normalizedActivityReward(plan.Items[i].RewardDoubloons)); err != nil {
+			return nil, err
+		}
 		if plan.Items[i].CompletedCount >= timesPerDay {
 			plan.Items[i].Completed = true
 			plan.Items[i].CompletedAt = &stamp
@@ -610,6 +636,17 @@ func (s *Service) TrackReminderMessage(
 		Kind:       kind,
 		SentAt:     now,
 	})
+}
+
+func (s *Service) UserDoubloonsBalance(ctx context.Context, userID int64, now time.Time) (int, error) {
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.resetDoubloonsIfPastDayEnd(ctx, user, now); err != nil {
+		return 0, err
+	}
+	return user.DoubloonsBalance, nil
 }
 
 func (s *Service) ListReminderMessagesBeforeDay(ctx context.Context, userID int64, dayLocal string) ([]domain.ReminderMessage, error) {
@@ -869,6 +906,60 @@ func (s *Service) syncTodayPlanTimesPerDay(ctx context.Context, userID, activity
 
 	plan.UpdatedAt = now
 	return s.repo.SaveDayPlan(ctx, plan)
+}
+
+func (s *Service) syncTodayPlanRewardDoubloons(ctx context.Context, userID, activityID int64, reward int) error {
+	now := s.now().UTC()
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	plan, err := s.repo.GetDayPlan(ctx, userID, LogicalDay(now, user.UTCOffsetMinutes, user.MorningTime))
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	updated := false
+	for i := range plan.Items {
+		if plan.Items[i].ActivityID != activityID {
+			continue
+		}
+		plan.Items[i].RewardDoubloons = normalizedActivityReward(reward)
+		plan.Items[i].UpdatedAt = now
+		updated = true
+		break
+	}
+	if !updated {
+		return nil
+	}
+
+	plan.UpdatedAt = now
+	return s.repo.SaveDayPlan(ctx, plan)
+}
+
+func normalizedActivityReward(reward int) int {
+	if reward < minActivityReward {
+		return defaultActivityReward
+	}
+	return reward
+}
+
+func (s *Service) resetDoubloonsIfPastDayEnd(ctx context.Context, user *domain.User, now time.Time) error {
+	if user.DoubloonsBalance == 0 {
+		return nil
+	}
+	if !InNotificationQuietHours(now, user.UTCOffsetMinutes, user.MorningTime, user.DayEndTime) {
+		return nil
+	}
+	if err := s.repo.UpdateUserDoubloonsBalance(ctx, user.ID, 0); err != nil {
+		return err
+	}
+	user.DoubloonsBalance = 0
+	return nil
 }
 
 func splitBatchTitles(input string) []string {

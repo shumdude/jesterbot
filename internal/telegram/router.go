@@ -99,6 +99,28 @@ func (r *Controller) handleActivityCallback(ctx context.Context, _ *bot.Bot, upd
 			return
 		}
 		r.showActivityTimesAsEdit(ctx, chatID, messageID, user.ID, activityID, page, 0)
+	case strings.HasPrefix(data, "activity:reward:set:"):
+		activityID, page, reward, err := parseActivityRewardCallback(data, "set")
+		if err != nil {
+			return
+		}
+		r.showActivityRewardAsEdit(ctx, chatID, messageID, user.ID, activityID, page, reward)
+	case strings.HasPrefix(data, "activity:reward:confirm:"):
+		activityID, page, reward, err := parseActivityRewardCallback(data, "confirm")
+		if err != nil {
+			return
+		}
+		if err := r.service.SetActivityRewardDoubloons(ctx, user.ID, activityID, reward); err != nil {
+			r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_reward", err.Error()), nil)
+			return
+		}
+		r.showActivityDetailAsEdit(ctx, chatID, messageID, user.ID, activityID, page, tr("activity_success_reward"))
+	case strings.HasPrefix(data, "activity:reward:"):
+		activityID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showActivityRewardAsEdit(ctx, chatID, messageID, user.ID, activityID, page, 0)
 	case strings.HasPrefix(data, "activity:window:"):
 		activityID, page, err := parseIDPageCallback(data)
 		if err != nil {
@@ -133,6 +155,82 @@ func (r *Controller) handleActivityCallback(ctx context.Context, _ *bot.Bot, upd
 			return
 		}
 		r.showActivitiesPageAsEdit(ctx, chatID, messageID, user.ID, tr("activity_success_delete"), page)
+	}
+}
+
+func (r *Controller) handleShopCallback(ctx context.Context, _ *bot.Bot, update *models.Update) {
+	r.logCallbackEvent("handling shop callback", update.CallbackQuery)
+	r.answerCallback(ctx, update.CallbackQuery.ID)
+	chatID, userID, messageID := callbackIdentity(update)
+	user, err := r.registeredUser(ctx, userID)
+	if err != nil {
+		r.handleRegistrationRequired(ctx, chatID, userID)
+		return
+	}
+
+	data := update.CallbackQuery.Data
+	switch {
+	case strings.HasPrefix(data, "shop:page:"):
+		page, err := parsePageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showShopPageAsEdit(ctx, chatID, messageID, user.ID, tr("shop_title"), page)
+	case strings.HasPrefix(data, "shop:editmode:"):
+		page, err := parsePageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showShopEditPageAsEdit(ctx, chatID, messageID, user.ID, tr("shop_edit_title"), page)
+	case strings.HasPrefix(data, "shop:editpage:"):
+		page, err := parsePageCallback(data)
+		if err != nil {
+			return
+		}
+		r.showShopEditPageAsEdit(ctx, chatID, messageID, user.ID, tr("shop_edit_title"), page)
+	case strings.HasPrefix(data, "shop:buy:"):
+		itemID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		purchase, err := r.service.BuyShopItem(ctx, user.ID, itemID, time.Now().UTC())
+		if err != nil {
+			r.showShopPageAsEdit(ctx, chatID, messageID, user.ID, tr("shop_error_buy", err.Error()), page)
+			return
+		}
+		r.showShopPageAsEdit(ctx, chatID, messageID, user.ID, tr("shop_success_buy", purchase.Item.Title, purchase.Spent, purchase.Balance), page)
+	case data == "shop:add":
+		sess := r.session(userID, chatID)
+		_ = sess.ClearNamespace(constants.NSShop)
+		_ = sess.Transition(ctx, constants.SceneAddShopItem)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("shop_prompt_item"), r.sceneKeyboardMarkup("shop_back_menu", userID, chatID))
+	case strings.HasPrefix(data, "shop:edit:"):
+		itemID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		item, err := r.service.GetShopItem(ctx, user.ID, itemID)
+		if err != nil {
+			r.showShopEditPageAsEdit(ctx, chatID, messageID, user.ID, tr("shop_error_open"), page)
+			return
+		}
+		sess := r.session(userID, chatID)
+		_ = sess.SetStrings(constants.NSShop, map[string]string{
+			constants.KeyShopItemID:   strconv.FormatInt(itemID, 10),
+			constants.KeyShopItemPage: strconv.Itoa(page),
+		})
+		_ = sess.Transition(ctx, constants.SceneEditShopItem)
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("shop_prompt_item_edit", item.Title, item.Cost), r.sceneKeyboardMarkup("shop_back_menu", userID, chatID))
+	case strings.HasPrefix(data, "shop:delete:"):
+		itemID, page, err := parseIDPageCallback(data)
+		if err != nil {
+			return
+		}
+		if err := r.service.DeleteShopItem(ctx, user.ID, itemID); err != nil {
+			r.showShopEditPageAsEdit(ctx, chatID, messageID, user.ID, tr("shop_error_delete", err.Error()), page)
+			return
+		}
+		r.showShopEditPageAsEdit(ctx, chatID, messageID, user.ID, tr("shop_success_delete"), page)
 	}
 }
 
@@ -387,6 +485,75 @@ func (r *Controller) showActivityTimesAsEdit(ctx context.Context, chatID int64, 
 	r.showScreenFromCallback(ctx, chatID, messageID, activityTimesText(activity.Title, draftTimes), buildActivityTimesKeyboard(activity.ID, page, draftTimes))
 }
 
+func (r *Controller) showActivityRewardAsEdit(ctx context.Context, chatID int64, messageID int, userID, activityID int64, page, draftReward int) {
+	activities, err := r.service.ListActivities(ctx, userID)
+	if err != nil {
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("activity_error_list"), r.menuMarkup(userID, chatID))
+		return
+	}
+
+	activity, ok := findActivityByID(activities, activityID)
+	if !ok {
+		r.showActivitiesPageAsEdit(ctx, chatID, messageID, userID, tr("activity_error_list"), page)
+		return
+	}
+
+	if draftReward < 1 {
+		draftReward = activity.RewardDoubloons
+	}
+	if draftReward < 1 {
+		draftReward = 1
+	}
+
+	r.showScreenFromCallback(ctx, chatID, messageID, activityRewardText(activity.Title, draftReward), buildActivityRewardKeyboard(activity.ID, page, draftReward))
+}
+
+func (r *Controller) showShopPage(ctx context.Context, chatID, userID int64, prefix string, page int) {
+	items, err := r.service.ListShopItems(ctx, userID)
+	if err != nil {
+		r.showScreen(ctx, chatID, tr("shop_error_list"), r.menuMarkup(userID, chatID))
+		return
+	}
+	balance, err := r.service.UserDoubloonsBalance(ctx, userID, time.Now().UTC())
+	if err != nil {
+		r.showScreen(ctx, chatID, tr("shop_error_balance"), r.menuMarkup(userID, chatID))
+		return
+	}
+	r.showScreen(ctx, chatID, prefix+"\n\n"+shopTextPage(items, balance, page, defaultInlinePageSize), buildShopKeyboardPage(items, page, defaultInlinePageSize))
+}
+
+func (r *Controller) showShopPageAsEdit(ctx context.Context, chatID int64, messageID int, userID int64, prefix string, page int) {
+	items, err := r.service.ListShopItems(ctx, userID)
+	if err != nil {
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("shop_error_list"), r.menuMarkup(userID, chatID))
+		return
+	}
+	balance, err := r.service.UserDoubloonsBalance(ctx, userID, time.Now().UTC())
+	if err != nil {
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("shop_error_balance"), r.menuMarkup(userID, chatID))
+		return
+	}
+	r.showScreenFromCallback(ctx, chatID, messageID, prefix+"\n\n"+shopTextPage(items, balance, page, defaultInlinePageSize), buildShopKeyboardPage(items, page, defaultInlinePageSize))
+}
+
+func (r *Controller) showShopEditPage(ctx context.Context, chatID, userID int64, prefix string, page int) {
+	items, err := r.service.ListShopItems(ctx, userID)
+	if err != nil {
+		r.showScreen(ctx, chatID, tr("shop_error_list"), r.menuMarkup(userID, chatID))
+		return
+	}
+	r.showScreen(ctx, chatID, prefix+"\n\n"+shopEditTextPage(items, page, defaultInlinePageSize), buildShopEditKeyboardPage(items, page, defaultInlinePageSize))
+}
+
+func (r *Controller) showShopEditPageAsEdit(ctx context.Context, chatID int64, messageID int, userID int64, prefix string, page int) {
+	items, err := r.service.ListShopItems(ctx, userID)
+	if err != nil {
+		r.showScreenFromCallback(ctx, chatID, messageID, tr("shop_error_list"), r.menuMarkup(userID, chatID))
+		return
+	}
+	r.showScreenFromCallback(ctx, chatID, messageID, prefix+"\n\n"+shopEditTextPage(items, page, defaultInlinePageSize), buildShopEditKeyboardPage(items, page, defaultInlinePageSize))
+}
+
 func (r *Controller) showSettings(ctx context.Context, chatID, telegramUserID int64, prefix string) {
 	r.showSettingsWithRender(ctx, chatID, telegramUserID, prefix, r.showScreen)
 }
@@ -510,7 +677,21 @@ func (r *Controller) showMainMenuFromCallback(ctx context.Context, chatID, userI
 	_ = sess.ClearNamespace(constants.NSActivity)
 	_ = sess.Transition(ctx, constants.SceneMenu)
 	r.deleteMessage(ctx, chatID, currentMessageID)
-	r.showScreen(ctx, chatID, r.eng.T("messages.menu.registered"), r.menuMarkup(userID, chatID))
+	r.showScreen(ctx, chatID, r.mainMenuText(ctx, userID), r.menuMarkup(userID, chatID))
+}
+
+func (r *Controller) mainMenuText(ctx context.Context, telegramUserID int64) string {
+	user, err := r.registeredUser(ctx, telegramUserID)
+	if err != nil {
+		return r.eng.T("messages.menu.registered")
+	}
+	balance, err := r.service.UserDoubloonsBalance(ctx, user.ID, time.Now().UTC())
+	if err != nil {
+		balance = user.DoubloonsBalance
+	}
+	return r.eng.Render("messages.menu.registered", map[string]string{
+		"name": fmt.Sprint(balance),
+	})
 }
 
 func usesHTMLParseMode(text string) bool {
@@ -668,6 +849,10 @@ func activityDetailText(prefix string, activity domain.Activity) string {
 	if timesPerDay < 1 {
 		timesPerDay = 1
 	}
+	reward := activity.RewardDoubloons
+	if reward < 1 {
+		reward = 1
+	}
 
 	window := formatActivityReminderWindows(activity)
 
@@ -676,6 +861,7 @@ func activityDetailText(prefix string, activity domain.Activity) string {
 		"",
 		tr("activity_detail_name", activity.Title),
 		tr("activity_detail_times", timesPerDay),
+		tr("activity_detail_reward", reward),
 		tr("activity_detail_window", window),
 	}
 
@@ -687,6 +873,13 @@ func activityTimesText(title string, timesPerDay int) string {
 		timesPerDay = 1
 	}
 	return tr("activity_prompt_times_inline", title, timesPerDay)
+}
+
+func activityRewardText(title string, reward int) string {
+	if reward < 1 {
+		reward = 1
+	}
+	return tr("activity_prompt_reward_inline", title, reward)
 }
 
 func formatActivityReminderWindows(activity domain.Activity) string {
@@ -795,24 +988,27 @@ func progressText(plan *domain.DayPlan) string {
 }
 
 func progressTextPage(plan *domain.DayPlan, page, pageSize int) string {
-	allSelected := make([]domain.DayPlanItem, 0, len(plan.Items))
+	remainingItems := make([]domain.DayPlanItem, 0, len(plan.Items))
 	completed := make([]string, 0)
 	remaining := make([]string, 0)
 	for _, item := range plan.Items {
-		if item.Selected {
-			allSelected = append(allSelected, item)
+		if !item.Selected {
+			continue
 		}
+		if item.Completed {
+			completed = append(completed, html.EscapeString(item.TitleSnapshot))
+			continue
+		}
+		remainingItems = append(remainingItems, item)
 	}
 
-	view := paginate(allSelected, page, pageSize)
+	view := paginate(remainingItems, page, pageSize)
 	for _, item := range view.Items {
 		timesPerDay := item.TimesPerDay
 		if timesPerDay < 1 {
 			timesPerDay = 1
 		}
 		switch {
-		case item.Completed:
-			completed = append(completed, html.EscapeString(item.TitleSnapshot))
 		case timesPerDay > 1 && item.CompletedCount > 0:
 			remaining = append(remaining, fmt.Sprintf("%s (%d/%d)", html.EscapeString(item.TitleSnapshot), item.CompletedCount, timesPerDay))
 		default:
@@ -834,6 +1030,58 @@ func progressTextPage(plan *domain.DayPlan, page, pageSize int) string {
 		lines = append(lines, decoratedLines(tr("today_remaining_title"), remaining)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func shopTextPage(items []domain.ShopItem, balance, page, pageSize int) string {
+	lines := []string{
+		tr("shop_balance", balance),
+	}
+	if len(items) == 0 {
+		lines = append(lines, tr("shop_list_empty"))
+		return strings.Join(lines, "\n")
+	}
+
+	view := paginate(items, page, pageSize)
+	if view.TotalPages > 1 {
+		lines = append(lines, pageSummary(view.Page, view.TotalPages, view.Start, view.End, view.TotalItems))
+	}
+	for i, item := range view.Items {
+		lines = append(lines, tr("shop_item_line", view.Start+i+1, item.Title, item.Cost))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func shopEditTextPage(items []domain.ShopItem, page, pageSize int) string {
+	if len(items) == 0 {
+		return tr("shop_list_empty")
+	}
+
+	view := paginate(items, page, pageSize)
+	lines := []string{tr("shop_edit_list_title")}
+	if view.TotalPages > 1 {
+		lines = append(lines, pageSummary(view.Page, view.TotalPages, view.Start, view.End, view.TotalItems))
+	}
+	for i, item := range view.Items {
+		lines = append(lines, tr("shop_item_line", view.Start+i+1, item.Title, item.Cost))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func parseShopItemInput(input string) (string, int, error) {
+	clean := strings.TrimSpace(input)
+	parts := strings.Split(clean, ",")
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("expected title, cost")
+	}
+	title := strings.TrimSpace(parts[0])
+	if title == "" {
+		return "", 0, domain.ErrEmptyTitle
+	}
+	cost, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || cost < 1 {
+		return "", 0, fmt.Errorf("invalid cost")
+	}
+	return title, cost, nil
 }
 
 func settingsText(user *domain.User, tickMinutes int, oneOffSettings *domain.OneOffReminderSettings) string {

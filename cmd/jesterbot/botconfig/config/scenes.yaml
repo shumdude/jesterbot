@@ -53,6 +53,20 @@ scenes:
     render_mode: DELETE_MESSAGE
     on_input:
       handler_id: activity_window_input
+  - id: shop_item_add
+    text: messages.shop.item
+    keyboard: shop_back_menu
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: shop_item_add_input
+  - id: shop_item_edit
+    text: messages.shop.item_edit
+    keyboard: shop_back_menu
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: shop_item_edit_input
   - id: settings_morning
     text: messages.settings.morning
     keyboard: settings_back_menu
@@ -99,6 +113,13 @@ scenes:
     text: messages.oneoff.priority
     keyboard: registration_back
     render_mode: DELETE_MESSAGE
+  - id: oneoff_reward
+    text: messages.oneoff.reward
+    keyboard: oneoff_reward_back_menu
+    parse_mode: Markdown
+    render_mode: DELETE_MESSAGE
+    on_input:
+      handler_id: oneoff_reward_input
   - id: oneoff_items
     text: messages.oneoff.items
     keyboard: oneoff_items_back_menu

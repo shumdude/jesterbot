@@ -14,12 +14,15 @@ type Repository interface {
 	CreateUser(ctx context.Context, user *domain.User) error
 	UpdateUserSettings(ctx context.Context, userID int64, morningTime, dayEndTime string, reminderIntervalMinutes int) error
 	UpdateUserNotificationsPausedUntil(ctx context.Context, userID int64, pausedUntil *time.Time) error
+	UpdateUserDoubloonsBalance(ctx context.Context, userID int64, balance int) error
+	AddUserDoubloons(ctx context.Context, userID int64, delta int) (int, error)
 	GetUserTickInterval(ctx context.Context, userID int64) (int, error)
 	SaveUserTickInterval(ctx context.Context, userID int64, minutes int) error
 
 	CreateActivity(ctx context.Context, activity *domain.Activity) error
 	UpdateActivity(ctx context.Context, userID, activityID int64, title string) error
 	UpdateActivityTimesPerDay(ctx context.Context, userID, activityID int64, timesPerDay int) error
+	UpdateActivityRewardDoubloons(ctx context.Context, userID, activityID int64, reward int) error
 	UpdateActivityReminderWindows(ctx context.Context, userID, activityID int64, windows []domain.ReminderWindow) error
 	DeleteActivity(ctx context.Context, userID, activityID int64) error
 	ListActivities(ctx context.Context, userID int64) ([]domain.Activity, error)
@@ -35,7 +38,14 @@ type Repository interface {
 	SaveOneOffTask(ctx context.Context, task *domain.OneOffTask) error
 	DeleteOneOffTask(ctx context.Context, userID, taskID int64) error
 
+	CreateShopItem(ctx context.Context, item *domain.ShopItem) error
+	UpdateShopItem(ctx context.Context, userID, itemID int64, title string, cost int) error
+	DeleteShopItem(ctx context.Context, userID, itemID int64) error
+	GetShopItem(ctx context.Context, userID, itemID int64) (*domain.ShopItem, error)
+	ListShopItems(ctx context.Context, userID int64) ([]domain.ShopItem, error)
+
 	SaveReminderMessage(ctx context.Context, message *domain.ReminderMessage) error
+	GetLastReminderMessage(ctx context.Context, userID int64, kind domain.ReminderMessageKind) (*domain.ReminderMessage, error)
 	ListReminderMessagesBeforeDay(ctx context.Context, userID int64, dayLocal string) ([]domain.ReminderMessage, error)
 	DeleteReminderMessage(ctx context.Context, userID int64, messageID int) error
 }
