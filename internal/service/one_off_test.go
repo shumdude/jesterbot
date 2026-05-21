@@ -112,6 +112,44 @@ func TestPickOneOffReminderDoesNotSendAfterDayEnd(t *testing.T) {
 	}
 }
 
+func TestPickOneOffReminderUsesUserReminderGap(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	user := seedUser(repo)
+	now := time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC)
+	task, err := svc.CreateOneOffTask(context.Background(), user.ID, "Pay bill", domain.OneOffTaskPriorityHigh, nil)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	dueAt := now.Add(-time.Minute)
+	task.NextReminderAt = &dueAt
+	if err := repo.SaveOneOffTask(context.Background(), task); err != nil {
+		t.Fatalf("save due task: %v", err)
+	}
+	if err := repo.SaveReminderMessage(context.Background(), &domain.ReminderMessage{
+		UserID:     user.ID,
+		ChatID:     user.ChatID,
+		MessageID:  100,
+		LogicalDay: "2026-04-06",
+		Kind:       domain.ReminderMessageKindOneOff,
+		SentAt:     now.Add(-10 * time.Minute),
+	}); err != nil {
+		t.Fatalf("save reminder message: %v", err)
+	}
+
+	if _, err := svc.PickOneOffReminder(context.Background(), user.ID, now); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected reminder gap to suppress one-off reminder, got %v", err)
+	}
+
+	picked, err := svc.PickOneOffReminder(context.Background(), user.ID, now.Add(21*time.Minute))
+	if err != nil {
+		t.Fatalf("expected reminder after gap: %v", err)
+	}
+	if picked.ID != task.ID {
+		t.Fatalf("expected task %d, got %+v", task.ID, picked)
+	}
+}
+
 func TestToggleOneOffTaskItemsCompletesTaskAndBuildsStats(t *testing.T) {
 	repo := newMemoryRepo()
 	svc := New(repo, 30)
@@ -152,6 +190,87 @@ func TestToggleOneOffTaskItemsCompletesTaskAndBuildsStats(t *testing.T) {
 	}
 	if stats.OneOffChecklistItems != 2 || stats.CompletedOneOffChecklistItems != 2 {
 		t.Fatalf("unexpected one-off checklist stats: %+v", stats)
+	}
+}
+
+func TestCompleteOneOffTaskAddsRewardDoubloons(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	now := time.Date(2026, 4, 9, 9, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := seedUser(repo)
+	task, err := svc.CreateOneOffTaskWithReward(context.Background(), user.ID, "Pay bill", domain.OneOffTaskPriorityMedium, 4, nil)
+	if err != nil {
+		t.Fatalf("create one-off task: %v", err)
+	}
+
+	if _, err := svc.CompleteOneOffTask(context.Background(), user.ID, task.ID, now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("complete one-off task: %v", err)
+	}
+
+	updated, err := repo.GetUserByID(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if updated.DoubloonsBalance != 4 {
+		t.Fatalf("expected 4 doubloons, got %d", updated.DoubloonsBalance)
+	}
+}
+
+func TestCompleteCompletedOneOffTaskDoesNotAddRewardAgain(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	now := time.Date(2026, 4, 9, 9, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := seedUser(repo)
+	task, err := svc.CreateOneOffTaskWithReward(context.Background(), user.ID, "Pay bill", domain.OneOffTaskPriorityMedium, 3, nil)
+	if err != nil {
+		t.Fatalf("create one-off task: %v", err)
+	}
+
+	if _, err := svc.CompleteOneOffTask(context.Background(), user.ID, task.ID, now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("complete one-off task: %v", err)
+	}
+	if _, err := svc.CompleteOneOffTask(context.Background(), user.ID, task.ID, now.Add(10*time.Minute)); err != nil {
+		t.Fatalf("complete already completed one-off task: %v", err)
+	}
+
+	updated, err := repo.GetUserByID(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if updated.DoubloonsBalance != 3 {
+		t.Fatalf("expected reward once, got %d doubloons", updated.DoubloonsBalance)
+	}
+}
+
+func TestToggleOneOffTaskItemsDoesNotAddRewardDoubloons(t *testing.T) {
+	repo := newMemoryRepo()
+	svc := New(repo, 30)
+	now := time.Date(2026, 4, 9, 9, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	user := seedUser(repo)
+	task, err := svc.CreateOneOffTaskWithReward(context.Background(), user.ID, "Launch feature", domain.OneOffTaskPriorityMedium, 5, []string{"Backend", "Bot UI"})
+	if err != nil {
+		t.Fatalf("create one-off task: %v", err)
+	}
+
+	if _, err := svc.ToggleOneOffTaskItem(context.Background(), user.ID, task.ID, task.Items[0].ID, now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("toggle first checklist item: %v", err)
+	}
+	if _, err := svc.ToggleOneOffTaskItem(context.Background(), user.ID, task.ID, task.Items[1].ID, now.Add(10*time.Minute)); err != nil {
+		t.Fatalf("toggle second checklist item: %v", err)
+	}
+
+	updated, err := repo.GetUserByID(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if updated.DoubloonsBalance != 0 {
+		t.Fatalf("expected no doubloons from checklist toggles, got %d", updated.DoubloonsBalance)
 	}
 }
 

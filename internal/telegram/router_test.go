@@ -81,13 +81,16 @@ func TestBuildActivityDetailKeyboardUsesPageAwareCallbacks(t *testing.T) {
 	if inline.InlineKeyboard[1][0].CallbackData != "activity:window:42:2" {
 		t.Fatalf("expected window callback, got %+v", inline.InlineKeyboard[1][0])
 	}
-	if inline.InlineKeyboard[2][0].CallbackData != "activity:delete:42:2" {
+	if inline.InlineKeyboard[2][0].CallbackData != "activity:reward:42:2" {
+		t.Fatalf("expected reward callback, got %+v", inline.InlineKeyboard[2][0])
+	}
+	if inline.InlineKeyboard[3][0].CallbackData != "activity:delete:42:2" {
 		t.Fatalf("expected delete callback, got %+v", inline.InlineKeyboard[2][0])
 	}
-	if inline.InlineKeyboard[3][0].CallbackData != "activity:list:2" {
+	if inline.InlineKeyboard[4][0].CallbackData != "activity:list:2" {
 		t.Fatalf("expected list callback, got %+v", inline.InlineKeyboard[3][0])
 	}
-	if inline.InlineKeyboard[4][0].CallbackData != "menu:back" {
+	if inline.InlineKeyboard[5][0].CallbackData != "menu:back" {
 		t.Fatalf("expected main menu callback, got %+v", inline.InlineKeyboard[4][0])
 	}
 }
@@ -330,6 +333,9 @@ func TestOneOffNoItemsHandlerCreatesTaskWithoutChecklist(t *testing.T) {
 	if err := session.SetStr(constants.NSOneOff, constants.KeyPriority, string(domain.OneOffTaskPriorityHigh)); err != nil {
 		t.Fatalf("set one-off priority: %v", err)
 	}
+	if err := session.SetStr(constants.NSOneOff, constants.KeyReward, "6"); err != nil {
+		t.Fatalf("set one-off reward: %v", err)
+	}
 
 	if _, err := oneOffNoItemsHandler(svc, controller)(context.Background(), tgBot, nil, session); err != nil {
 		t.Fatalf("run no-items handler: %v", err)
@@ -343,6 +349,9 @@ func TestOneOffNoItemsHandlerCreatesTaskWithoutChecklist(t *testing.T) {
 	}
 	if len(repo.tasks[0].Items) != 0 {
 		t.Fatalf("expected task without checklist items, got %+v", repo.tasks[0].Items)
+	}
+	if repo.tasks[0].RewardDoubloons != 6 {
+		t.Fatalf("expected task reward to be preserved, got %+v", repo.tasks[0])
 	}
 }
 
@@ -419,6 +428,20 @@ func TestOneOffTasksTextAndKeyboardHideHistoryFromMenu(t *testing.T) {
 	}
 }
 
+func TestOneOffTaskDetailTextShowsReward(t *testing.T) {
+	text := oneOffTaskDetailText(&domain.OneOffTask{
+		ID:              1,
+		Title:           "Pay bill",
+		Priority:        domain.OneOffTaskPriorityMedium,
+		Status:          domain.OneOffTaskStatusActive,
+		RewardDoubloons: 5,
+	})
+
+	if !strings.Contains(text, "Награда: 5 дублон") {
+		t.Fatalf("expected one-off reward in detail text, got %q", text)
+	}
+}
+
 func TestOneOffTasksTextPageShowsOnlyCurrentSlice(t *testing.T) {
 	tasks := make([]domain.OneOffTask, 0, 13)
 	for i := 1; i <= 13; i++ {
@@ -468,6 +491,38 @@ func TestBuildPlanSelectionKeyboardPageUsesPageAwareCallbacks(t *testing.T) {
 	lastRow := inline.InlineKeyboard[len(inline.InlineKeyboard)-1]
 	if lastRow[0].CallbackData != "menu:back" {
 		t.Fatalf("expected main menu callback, got %+v", lastRow[0])
+	}
+}
+
+func TestProgressPageShiftsRemainingItemsAfterCompletion(t *testing.T) {
+	plan := &domain.DayPlan{
+		Status: domain.PlanStatusActive,
+		Items:  make([]domain.DayPlanItem, 0, 13),
+	}
+	for i := 1; i <= 13; i++ {
+		item := domain.DayPlanItem{
+			ActivityID:    int64(i),
+			TitleSnapshot: fmt.Sprintf("Task %d", i),
+			Selected:      true,
+		}
+		if i <= 12 {
+			item.Completed = true
+		}
+		plan.Items = append(plan.Items, item)
+	}
+
+	text := progressTextPage(plan, 0, 12)
+	if !strings.Contains(text, "Task 13") {
+		t.Fatalf("expected remaining task from second page to move to first page, got %q", text)
+	}
+
+	markup := buildProgressKeyboardPage(plan, 0, 12)
+	inline, ok := markup.(*models.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected inline keyboard, got %T", markup)
+	}
+	if inline.InlineKeyboard[0][0].CallbackData != "done:13:0" {
+		t.Fatalf("expected first done button for shifted task, got %+v", inline.InlineKeyboard[0][0])
 	}
 }
 
@@ -733,6 +788,30 @@ func TestParseOneOffReminderSettingsInputRejectsInvalidValues(t *testing.T) {
 
 	for _, input := range inputs {
 		if _, _, _, err := parseOneOffReminderSettingsInput(input); err == nil {
+			t.Fatalf("expected parsing to fail for %q", input)
+		}
+	}
+}
+
+func TestParseOneOffRewardInputUsesDefaultAndRejectsInvalidValues(t *testing.T) {
+	reward, err := parseOneOffRewardInput("-")
+	if err != nil {
+		t.Fatalf("parse default reward: %v", err)
+	}
+	if reward != 1 {
+		t.Fatalf("expected default reward 1, got %d", reward)
+	}
+
+	reward, err = parseOneOffRewardInput("5")
+	if err != nil {
+		t.Fatalf("parse explicit reward: %v", err)
+	}
+	if reward != 5 {
+		t.Fatalf("expected reward 5, got %d", reward)
+	}
+
+	for _, input := range []string{"0", "-1", "abc"} {
+		if _, err := parseOneOffRewardInput(input); err == nil {
 			t.Fatalf("expected parsing to fail for %q", input)
 		}
 	}

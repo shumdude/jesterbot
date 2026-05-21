@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"jesterbot/internal/domain"
@@ -23,6 +25,27 @@ func (r *Repository) SaveReminderMessage(ctx context.Context, message *domain.Re
 		return fmt.Errorf("save reminder message: %w", err)
 	}
 	return nil
+}
+
+func (r *Repository) GetLastReminderMessage(ctx context.Context, userID int64, kind domain.ReminderMessageKind) (*domain.ReminderMessage, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT user_id, chat_id, message_id, logical_day, kind, sent_at
+		FROM reminder_messages
+		WHERE user_id = ? AND kind = ?
+		ORDER BY sent_at DESC, message_id DESC
+		LIMIT 1`,
+		userID,
+		string(kind),
+	)
+
+	message, err := scanReminderMessage(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	return message, nil
 }
 
 func (r *Repository) ListReminderMessagesBeforeDay(ctx context.Context, userID int64, dayLocal string) ([]domain.ReminderMessage, error) {
@@ -82,4 +105,29 @@ func (r *Repository) DeleteReminderMessage(ctx context.Context, userID int64, me
 		return fmt.Errorf("delete reminder message: %w", err)
 	}
 	return nil
+}
+
+func scanReminderMessage(scanner interface{ Scan(dest ...any) error }) (*domain.ReminderMessage, error) {
+	var (
+		message domain.ReminderMessage
+		kind    string
+		sentAt  string
+	)
+	if err := scanner.Scan(
+		&message.UserID,
+		&message.ChatID,
+		&message.MessageID,
+		&message.LogicalDay,
+		&kind,
+		&sentAt,
+	); err != nil {
+		return nil, fmt.Errorf("scan reminder message: %w", err)
+	}
+	parsedSentAt, err := parseTime(sentAt)
+	if err != nil {
+		return nil, err
+	}
+	message.Kind = domain.ReminderMessageKind(kind)
+	message.SentAt = parsedSentAt
+	return &message, nil
 }

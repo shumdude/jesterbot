@@ -125,4 +125,19 @@ var migrations = []string{
 	);`,
 	`CREATE INDEX IF NOT EXISTS idx_reminder_messages_user_day
 		ON reminder_messages(user_id, logical_day);`,
+	`ALTER TABLE users ADD COLUMN doubloons_balance INTEGER NOT NULL DEFAULT 0;`,
+	`ALTER TABLE activities ADD COLUMN reward_doubloons INTEGER NOT NULL DEFAULT 1;`,
+	`ALTER TABLE daily_plan_items ADD COLUMN reward_doubloons INTEGER NOT NULL DEFAULT 1;`,
+	`CREATE TABLE IF NOT EXISTS shop_items (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		title TEXT NOT NULL,
+		cost INTEGER NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_shop_items_user
+		ON shop_items(user_id, id);`,
+	`ALTER TABLE one_off_tasks ADD COLUMN reward_doubloons INTEGER NOT NULL DEFAULT 1;`,
 }

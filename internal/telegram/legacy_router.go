@@ -30,6 +30,7 @@ func (r *Controller) RegisterLegacyHandlers() {
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "activity:", bot.MatchTypePrefix, r.handleActivityCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "plan:", bot.MatchTypePrefix, r.handlePlanCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "done:", bot.MatchTypePrefix, r.handleDoneCallback)
+	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "shop:", bot.MatchTypePrefix, r.handleShopCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "oneoff:", bot.MatchTypePrefix, r.handleOneOffCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "settings:", bot.MatchTypePrefix, r.handleSettingsCallback)
 	r.bot.RegisterHandler(bot.HandlerTypeCallbackQueryData, "menu:", bot.MatchTypePrefix, r.handleMenuCallback)
@@ -81,6 +82,15 @@ func (r *Controller) OpenOneOffTasks(ctx context.Context, chatID, telegramUserID
 		return
 	}
 	r.showOneOffTasksPage(ctx, chatID, user.ID, tr("oneoff_title"), 0)
+}
+
+func (r *Controller) OpenShop(ctx context.Context, chatID, telegramUserID int64) {
+	user, err := r.registeredUser(ctx, telegramUserID)
+	if err != nil {
+		r.handleRegistrationRequired(ctx, chatID, telegramUserID)
+		return
+	}
+	r.showShopPage(ctx, chatID, user.ID, tr("shop_title"), 0)
 }
 
 func (r *Controller) OpenSettings(ctx context.Context, chatID, telegramUserID int64) {

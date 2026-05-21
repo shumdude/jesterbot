@@ -24,22 +24,27 @@ func RegisterTgamlHandlers(eng *tgamlengine.Engine, svc *service.Service, ui *Co
 	eng.Register(constants.HandlerRegistrationMorning, registrationMorningHandler(eng, svc, ui))
 	eng.Register(constants.HandlerOpenToday, openLegacyScreenHandler(eng, svc, ui.OpenToday))
 	eng.Register(constants.HandlerOpenActivities, openLegacyScreenHandler(eng, svc, ui.OpenActivities))
+	eng.Register(constants.HandlerOpenShop, openLegacyScreenHandler(eng, svc, ui.OpenShop))
 	eng.Register(constants.HandlerOpenOneOff, openLegacyScreenHandler(eng, svc, ui.OpenOneOffTasks))
 	eng.Register(constants.HandlerOpenSettings, openLegacyScreenHandler(eng, svc, ui.OpenSettings))
 	eng.Register(constants.HandlerOpenStats, openLegacyScreenHandler(eng, svc, ui.OpenStats))
 	eng.Register(constants.HandlerFinishDay, finishDayHandler(eng, svc, ui))
 	eng.Register(constants.HandlerBackActivityDetail, backActivityDetailHandler(svc, ui))
 	eng.Register(constants.HandlerBackOneOffPriority, backOneOffPriorityHandler(ui))
+	eng.Register(constants.HandlerBackOneOffReward, backOneOffRewardHandler(ui))
 	eng.Register(constants.HandlerAddActivity, addActivityHandler(svc, ui))
 	eng.Register(constants.HandlerEditActivity, editActivityHandler(svc, ui))
 	eng.Register(constants.HandlerSetActivityTimes, activityTimesHandler(svc, ui))
 	eng.Register(constants.HandlerSetActivityWindow, activityWindowHandler(svc, ui))
+	eng.Register(constants.HandlerAddShopItem, addShopItemHandler(svc, ui))
+	eng.Register(constants.HandlerEditShopItem, editShopItemHandler(svc, ui))
 	eng.Register(constants.HandlerUpdateMorning, updateMorningHandler(svc, ui))
 	eng.Register(constants.HandlerUpdateDayEnd, updateDayEndHandler(svc, ui))
 	eng.Register(constants.HandlerUpdateReminder, updateReminderHandler(svc, ui))
 	eng.Register(constants.HandlerUpdateTick, updateTickHandler(svc, ui))
 	eng.Register(constants.HandlerUpdateOneOffReminder, updateOneOffReminderHandler(svc, ui))
 	eng.Register(constants.HandlerOneOffTitle, oneOffTitleHandler(ui))
+	eng.Register(constants.HandlerOneOffReward, oneOffRewardHandler(ui))
 	eng.Register(constants.HandlerOneOffItems, oneOffItemsHandler(svc, ui))
 	eng.Register(constants.HandlerOneOffNoItems, oneOffNoItemsHandler(svc, ui))
 }
@@ -93,6 +98,25 @@ func backOneOffPriorityHandler(ui *Controller) tgamlengine.HandlerFunc {
 			return "", err
 		}
 		ui.showScreen(ctx, s.ChatID, tr("oneoff_prompt_priority"), buildOneOffPriorityKeyboard())
+		return "", nil
+	}
+}
+
+func backOneOffRewardHandler(ui *Controller) tgamlengine.HandlerFunc {
+	return func(ctx context.Context, _ *bot.Bot, _ *models.Update, s *tgamlsession.Session) (string, error) {
+		title := strings.TrimSpace(s.GetStr(constants.NSOneOff, constants.KeyTaskTitle))
+		priority := strings.TrimSpace(s.GetStr(constants.NSOneOff, constants.KeyPriority))
+		if title == "" || priority == "" {
+			if err := s.Transition(ctx, constants.SceneAddOneOffPriority); err != nil {
+				return "", err
+			}
+			ui.showScreen(ctx, s.ChatID, tr("oneoff_prompt_priority"), buildOneOffPriorityKeyboard())
+			return "", nil
+		}
+		if err := s.Transition(ctx, constants.SceneAddOneOffReward); err != nil {
+			return "", err
+		}
+		ui.showScreen(ctx, s.ChatID, tr("oneoff_prompt_reward"), ui.sceneKeyboardMarkup("oneoff_reward_back_menu", s.UserID, s.ChatID))
 		return "", nil
 	}
 }
@@ -283,6 +307,60 @@ func activityWindowHandler(svc *service.Service, ui *Controller) tgamlengine.Han
 	}
 }
 
+func addShopItemHandler(svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
+	return func(ctx context.Context, _ *bot.Bot, u *models.Update, s *tgamlsession.Session) (string, error) {
+		user, err := svc.FindUserByTelegramID(ctx, s.UserID)
+		if err != nil {
+			ui.handleRegistrationRequired(ctx, s.ChatID, s.UserID)
+			return "", nil
+		}
+		title, cost, err := parseShopItemInput(u.Message.Text)
+		if err != nil {
+			ui.showScreen(ctx, s.ChatID, tr("shop_error_invalid_item"), nil)
+			return "", nil
+		}
+		item, err := svc.SaveShopItem(ctx, user.ID, 0, title, cost)
+		if err != nil {
+			ui.showScreen(ctx, s.ChatID, tr("shop_error_save", err.Error()), nil)
+			return "", nil
+		}
+		_ = s.ClearNamespace(constants.NSShop)
+		_ = s.Transition(ctx, constants.SceneMenu)
+		ui.showShopEditPage(ctx, s.ChatID, user.ID, tr("shop_success_add", item.Title), 0)
+		return "", nil
+	}
+}
+
+func editShopItemHandler(svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
+	return func(ctx context.Context, _ *bot.Bot, u *models.Update, s *tgamlsession.Session) (string, error) {
+		user, err := svc.FindUserByTelegramID(ctx, s.UserID)
+		if err != nil {
+			ui.handleRegistrationRequired(ctx, s.ChatID, s.UserID)
+			return "", nil
+		}
+		itemID, err := sessionInt64(s, constants.NSShop, constants.KeyShopItemID)
+		if err != nil {
+			ui.showScreen(ctx, s.ChatID, tr("shop_error_save", err.Error()), nil)
+			return "", nil
+		}
+		page := sessionInt(s, constants.NSShop, constants.KeyShopItemPage)
+		title, cost, err := parseShopItemInput(u.Message.Text)
+		if err != nil {
+			ui.showScreen(ctx, s.ChatID, tr("shop_error_invalid_item"), nil)
+			return "", nil
+		}
+		item, err := svc.SaveShopItem(ctx, user.ID, itemID, title, cost)
+		if err != nil {
+			ui.showScreen(ctx, s.ChatID, tr("shop_error_save", err.Error()), nil)
+			return "", nil
+		}
+		_ = s.ClearNamespace(constants.NSShop)
+		_ = s.Transition(ctx, constants.SceneMenu)
+		ui.showShopEditPage(ctx, s.ChatID, user.ID, tr("shop_success_update", item.Title), page)
+		return "", nil
+	}
+}
+
 func updateMorningHandler(svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
 	return func(ctx context.Context, _ *bot.Bot, u *models.Update, s *tgamlsession.Session) (string, error) {
 		user, err := svc.FindUserByTelegramID(ctx, s.UserID)
@@ -401,6 +479,24 @@ func oneOffTitleHandler(ui *Controller) tgamlengine.HandlerFunc {
 	}
 }
 
+func oneOffRewardHandler(ui *Controller) tgamlengine.HandlerFunc {
+	return func(ctx context.Context, _ *bot.Bot, u *models.Update, s *tgamlsession.Session) (string, error) {
+		reward, err := parseOneOffRewardInput(u.Message.Text)
+		if err != nil {
+			ui.showScreen(ctx, s.ChatID, tr("oneoff_error_invalid_reward"), nil)
+			return "", nil
+		}
+		if err := s.SetStr(constants.NSOneOff, constants.KeyReward, strconv.Itoa(reward)); err != nil {
+			return "", err
+		}
+		if err := s.Transition(ctx, constants.SceneAddOneOffItems); err != nil {
+			return "", err
+		}
+		ui.showScreen(ctx, s.ChatID, tr("oneoff_prompt_items"), ui.sceneKeyboardMarkup("oneoff_items_back_menu", s.UserID, s.ChatID))
+		return "", nil
+	}
+}
+
 func oneOffItemsHandler(svc *service.Service, ui *Controller) tgamlengine.HandlerFunc {
 	return func(ctx context.Context, _ *bot.Bot, u *models.Update, s *tgamlsession.Session) (string, error) {
 		return createOneOffTaskWithChecklist(ctx, svc, ui, s, parseOneOffChecklistInput(u.Message.Text))
@@ -420,7 +516,8 @@ func createOneOffTaskWithChecklist(ctx context.Context, svc *service.Service, ui
 		return "", nil
 	}
 	priority := domain.OneOffTaskPriority(s.GetStr(constants.NSOneOff, constants.KeyPriority))
-	task, err := svc.CreateOneOffTask(ctx, user.ID, s.GetStr(constants.NSOneOff, constants.KeyTaskTitle), priority, checklist)
+	reward := sessionInt(s, constants.NSOneOff, constants.KeyReward)
+	task, err := svc.CreateOneOffTaskWithReward(ctx, user.ID, s.GetStr(constants.NSOneOff, constants.KeyTaskTitle), priority, reward, checklist)
 	if err != nil {
 		ui.showScreen(ctx, s.ChatID, tr("oneoff_error_create", err.Error()), nil)
 		return "", nil

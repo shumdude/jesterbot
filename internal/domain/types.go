@@ -1,3 +1,8 @@
+// AI-AGENT: Domain entities shared by service, Telegram UI, and SQLite persistence.
+// Entry points are the struct types used across internal/service and internal/storage/sqlite.
+// Keep stored fields backward-compatible; production DB changes must go through migrations.
+// Update repository scans and test memory repos whenever persisted fields are added.
+//
 package domain
 
 import "time"
@@ -12,6 +17,7 @@ type User struct {
 	DayEndTime               string
 	NotificationsPausedUntil *time.Time
 	ReminderIntervalMinutes  int
+	DoubloonsBalance         int
 	CreatedAt                time.Time
 	UpdatedAt                time.Time
 }
@@ -22,6 +28,7 @@ type Activity struct {
 	Title               string
 	SortOrder           int
 	TimesPerDay         int
+	RewardDoubloons     int
 	ReminderWindowStart string // "HH:MM" local time; empty = no restriction
 	ReminderWindowEnd   string // "HH:MM" local time; empty = no restriction
 	ReminderWindows     []ReminderWindow
@@ -50,16 +57,17 @@ const (
 )
 
 type OneOffTask struct {
-	ID             int64
-	UserID         int64
-	Title          string
-	Priority       OneOffTaskPriority
-	Status         OneOffTaskStatus
-	NextReminderAt *time.Time
-	CompletedAt    *time.Time
-	Items          []OneOffTaskItem
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              int64
+	UserID          int64
+	Title           string
+	Priority        OneOffTaskPriority
+	Status          OneOffTaskStatus
+	RewardDoubloons int
+	NextReminderAt  *time.Time
+	CompletedAt     *time.Time
+	Items           []OneOffTaskItem
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type OneOffTaskItem struct {
@@ -98,6 +106,21 @@ type ReminderMessage struct {
 	SentAt     time.Time
 }
 
+type ShopItem struct {
+	ID        int64
+	UserID    int64
+	Title     string
+	Cost      int
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type ShopPurchase struct {
+	Item    ShopItem
+	Spent   int
+	Balance int
+}
+
 type PlanStatus string
 
 const (
@@ -122,18 +145,19 @@ type DayPlan struct {
 }
 
 type DayPlanItem struct {
-	ID             int64
-	PlanID         int64
-	ActivityID     int64
-	TitleSnapshot  string
-	Selected       bool
-	Completed      bool
-	ReminderCycle  int
-	TimesPerDay    int
-	CompletedCount int
-	CompletedAt    *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              int64
+	PlanID          int64
+	ActivityID      int64
+	TitleSnapshot   string
+	Selected        bool
+	Completed       bool
+	ReminderCycle   int
+	TimesPerDay     int
+	RewardDoubloons int
+	CompletedCount  int
+	CompletedAt     *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type DailyStats struct {
